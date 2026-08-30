@@ -265,6 +265,19 @@ describe.sequential("IssueFlow API", () => {
     expect(json<{ items: Array<{ id: number; issueCount: number }> }>(await app.inject({ method: "GET", url: "/api/labels", headers: { cookie: userACookie } })).items.find(({ id }) => id === labelId)?.issueCount).toBe(1);
   });
 
+  it("records precise title changes and skips vague no-op edit events", async () => {
+    const created = await app.inject({ method: "POST", url: "/api/issues", headers: { cookie: userACookie }, payload: { title: "Old timeline title", body: "Old body" } });
+    const issue = json<{ id: number; updatedAt: string }>(created);
+    const updated = await app.inject({ method: "PATCH", url: `/api/issues/${issue.id}`, headers: { cookie: userACookie }, payload: { title: "New timeline title", body: "New body", updatedAt: issue.updatedAt } });
+    expect(updated.statusCode).toBe(200);
+    const event = await prisma.timelineEvent.findFirstOrThrow({ where: { issueId: issue.id, type: "ISSUE_EDITED" } });
+    expect(JSON.parse(event.data)).toEqual({ title: { from: "Old timeline title", to: "New timeline title" }, bodyChanged: true });
+
+    const unchanged = await app.inject({ method: "PATCH", url: `/api/issues/${issue.id}`, headers: { cookie: userACookie }, payload: { title: "New timeline title", body: "New body", updatedAt: json<{ updatedAt: string }>(updated).updatedAt } });
+    expect(unchanged.statusCode).toBe(200);
+    expect(await prisma.timelineEvent.count({ where: { issueId: issue.id, type: "ISSUE_EDITED" } })).toBe(1);
+  });
+
   it("manages state-only, label-only and combined commit actions", async () => {
     expect((await app.inject({ method: "GET", url: "/api/admin/commit-actions", headers: { cookie: userACookie } })).statusCode).toBe(403);
     const listed = await app.inject({ method: "GET", url: "/api/admin/commit-actions", headers: { cookie: adminCookie } });

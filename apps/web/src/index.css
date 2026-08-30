@@ -25,6 +25,7 @@
   .markdown code { @apply rounded bg-slate-100 px-1 py-0.5 text-sm; }
   .markdown pre { @apply my-3 overflow-x-auto rounded-lg bg-slate-900 p-4 text-sm text-slate-50; }
   .markdown blockquote { @apply border-l-4 border-brand-200 pl-4 text-slate-600; }
+  .comment-markdown img { height: auto; max-width: min(100%, 500px); }
 }
 
 @media (prefers-reduced-motion: reduce) {

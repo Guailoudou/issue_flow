@@ -114,6 +114,8 @@ export async function issueRoutes(app: FastifyInstance, prisma: PrismaClient, ai
     const productOwnerChange = productOwnerIds ? diff(oldProductOwners, [...new Set(productOwnerIds)]) : null;
     const developerOwnerChange = developerOwnerIds ? diff(oldDeveloperOwners, [...new Set(developerOwnerIds)]) : null;
     const labelChange = input.labelIds ? diff(oldLabels.map((item) => item.labelId), [...new Set(input.labelIds)]) : null;
+    const titleChanged = input.title !== undefined && input.title !== old.title;
+    const bodyChanged = input.body !== undefined && input.body !== old.body;
     const issue = await prisma.$transaction(async (tx) => {
       const changed = await tx.issue.updateMany({ where: { id, updatedAt: new Date(input.updatedAt) }, data: {
         ...(input.title !== undefined ? { title: input.title } : {}), ...(input.body !== undefined ? { body: input.body } : {}),
@@ -125,7 +127,7 @@ export async function issueRoutes(app: FastifyInstance, prisma: PrismaClient, ai
       if (developerOwnerIds) { await tx.issueAssignee.deleteMany({ where: { issueId: id, ownerType: "DEVELOPMENT" } }); await tx.issueAssignee.createMany({ data: [...new Set(developerOwnerIds)].map((userId) => ({ issueId: id, userId, ownerType: "DEVELOPMENT" })) }); }
       if (input.labelIds) { await tx.issueLabel.deleteMany({ where: { issueId: id } }); await tx.issueLabel.createMany({ data: [...new Set(input.labelIds)].map((labelId) => ({ issueId: id, labelId })) }); }
       const events: { type: string; data: unknown }[] = [];
-      if (input.title !== undefined || input.body !== undefined) events.push({ type: "ISSUE_EDITED", data: { titleChanged: input.title !== undefined && input.title !== old.title, bodyChanged: input.body !== undefined && input.body !== old.body } });
+      if (titleChanged || bodyChanged) events.push({ type: "ISSUE_EDITED", data: { ...(titleChanged ? { title: { from: old.title, to: input.title } } : {}), bodyChanged } });
       if (input.state && input.state !== old.state) events.push({
         type: input.state === "CLOSED" ? "ISSUE_CLOSED" : "ISSUE_REOPENED",
         data: { from: old.state, to: input.state },
