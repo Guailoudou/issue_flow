@@ -8,11 +8,11 @@ describe('Timeline', () => {
     render(<Timeline events={[
       { id: 1, type: 'ISSUE_CLOSED_BY_YUNXIAO_COMMIT', actor, createdAt: '2026-08-29T00:00:00.000Z' },
       { id: 2, type: 'ISSUE_REOPENED_BY_YUNXIAO_COMMIT', actor, createdAt: '2026-08-29T01:00:00.000Z' },
-      { id: 3, type: 'ISSUE_AWAITING_ACCEPTANCE_BY_YUNXIAO_COMMIT', actor, createdAt: '2026-08-29T02:00:00.000Z' },
+      { id: 3, type: 'LABELS_CHANGED', actor, createdAt: '2026-08-29T02:00:00.000Z' },
     ]} />);
 
     expect(screen.getByText('通过云效提交关闭了 Issue')).toBeInTheDocument();
     expect(screen.getByText('通过云效提交重新打开了 Issue')).toBeInTheDocument();
-    expect(screen.getByText('通过云效提交将 Issue 标记为待验收')).toBeInTheDocument();
+    expect(screen.getByText('更新了标签')).toBeInTheDocument();
   });
 });

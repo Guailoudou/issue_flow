@@ -69,6 +69,8 @@ docker compose --env-file .env.docker down
 
 管理员可以在“管理后台 → 云效联动”绑定 Codeup 仓库，接收 Push 与合并请求 Webhook，并把提交、合并请求关联到 Issue。提交信息、分支名、合并请求标题或描述中的 `#123` 会引用对应 Issue；合并后的合并请求使用 `fixes #123`、`closes #123` 或 `resolves #123` 可自动关闭 Issue。
 
+“管理后台 → 提交操作”可自定义 `#关键字Issue编号` 指令，使 Push 提交修改 Issue 的开放/关闭状态、添加标签，或同时执行两者。系统默认提供 `#o4`（开启 4 号 Issue）和 `#c4`（关闭 4 号 Issue）。
+
 配置云效个人访问令牌或 Webhook Secret 前，需要在 `apps/api/.env` 设置独立的 32 字节加密密钥：
 
 ```bash

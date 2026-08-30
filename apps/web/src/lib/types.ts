@@ -1,6 +1,6 @@
 export type Role = 'ADMIN' | 'USER';
 export type BusinessRole = 'MANAGEMENT' | 'DEVELOPMENT' | 'PRODUCT';
-export type IssueStatus = 'OPEN' | 'AWAITING_ACCEPTANCE' | 'CLOSED';
+export type IssueStatus = 'OPEN' | 'CLOSED';
 export type MilestoneStatus = 'OPEN' | 'CLOSED';
 
 export type EntityId = number;

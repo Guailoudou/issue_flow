@@ -39,7 +39,7 @@ export async function issueRoutes(app: FastifyInstance, prisma: PrismaClient, ai
     const setting = await prisma.platformSetting.findUniqueOrThrow({ where: { id: 1 } });
     const pageSize = query.pageSize ?? setting.defaultPageSize;
     const where: Prisma.IssueWhereInput = {
-      ...(query.state ? { state: query.state === "OPEN" ? { in: ["OPEN", "AWAITING_ACCEPTANCE"] } : query.state } : {}), ...(query.authorId ? { authorId: query.authorId } : {}),
+      ...(query.state ? { state: query.state } : {}), ...(query.authorId ? { authorId: query.authorId } : {}),
       ...(query.assigneeId ? { assignees: { some: { userId: query.assigneeId } } } : {}),
       ...(query.labelIds?.length ? { AND: query.labelIds.map((labelId) => ({ labels: { some: { labelId } } })) } : query.labelId ? { labels: { some: { labelId: query.labelId } } } : {}),
       ...(query.milestoneId ? { milestoneId: query.milestoneId } : {}),
@@ -127,7 +127,7 @@ export async function issueRoutes(app: FastifyInstance, prisma: PrismaClient, ai
       const events: { type: string; data: unknown }[] = [];
       if (input.title !== undefined || input.body !== undefined) events.push({ type: "ISSUE_EDITED", data: { titleChanged: input.title !== undefined && input.title !== old.title, bodyChanged: input.body !== undefined && input.body !== old.body } });
       if (input.state && input.state !== old.state) events.push({
-        type: input.state === "CLOSED" ? "ISSUE_CLOSED" : input.state === "AWAITING_ACCEPTANCE" ? "ISSUE_AWAITING_ACCEPTANCE" : "ISSUE_REOPENED",
+        type: input.state === "CLOSED" ? "ISSUE_CLOSED" : "ISSUE_REOPENED",
         data: { from: old.state, to: input.state },
       });
       if ((productOwnerChange && (productOwnerChange.added.length || productOwnerChange.removed.length)) || (developerOwnerChange && (developerOwnerChange.added.length || developerOwnerChange.removed.length))) events.push({ type: "ASSIGNEES_CHANGED", data: { product: productOwnerChange, development: developerOwnerChange } });

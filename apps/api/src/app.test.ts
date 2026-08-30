@@ -64,6 +64,8 @@ beforeAll(async () => {
   await prisma.issueAssignee.deleteMany();
   await prisma.issueLabel.deleteMany();
   await prisma.issue.deleteMany();
+  await prisma.commitActionLabel.deleteMany();
+  await prisma.commitAction.deleteMany();
   await prisma.label.deleteMany();
   await prisma.milestone.deleteMany();
   await prisma.apiToken.deleteMany();
@@ -263,6 +265,28 @@ describe.sequential("IssueFlow API", () => {
     expect(json<{ items: Array<{ id: number; issueCount: number }> }>(await app.inject({ method: "GET", url: "/api/labels", headers: { cookie: userACookie } })).items.find(({ id }) => id === labelId)?.issueCount).toBe(1);
   });
 
+  it("manages state-only, label-only and combined commit actions", async () => {
+    expect((await app.inject({ method: "GET", url: "/api/admin/commit-actions", headers: { cookie: userACookie } })).statusCode).toBe(403);
+    const listed = await app.inject({ method: "GET", url: "/api/admin/commit-actions", headers: { cookie: adminCookie } });
+    const systemActions = json<{ items: Array<{ id: number; keyword: string; isSystem: boolean }> }>(listed).items;
+    expect(systemActions.filter(({ isSystem }) => isSystem).map(({ keyword }) => keyword).sort()).toEqual(["c", "o"]);
+    expect((await app.inject({ method: "DELETE", url: `/api/admin/commit-actions/${systemActions[0]!.id}`, headers: { cookie: adminCookie } })).statusCode).toBe(409);
+
+    const urgent = await prisma.label.findUniqueOrThrow({ where: { name: "urgent" } });
+    const bug = await prisma.label.findUniqueOrThrow({ where: { name: "bug" } });
+    const combined = await app.inject({ method: "POST", url: "/api/admin/commit-actions", headers: { cookie: adminCookie }, payload: { name: "完成并加急", keyword: "DONE", state: "CLOSED", labelIds: [urgent.id] } });
+    expect(combined.statusCode).toBe(201);
+    expect(json<{ keyword: string; state: string }>(combined)).toMatchObject({ keyword: "done", state: "CLOSED" });
+    const combinedId = json<{ id: number }>(combined).id;
+    const updated = await app.inject({ method: "PUT", url: `/api/admin/commit-actions/${combinedId}`, headers: { cookie: adminCookie }, payload: { name: "完成并标记加急", keyword: "done", state: "CLOSED", labelIds: [urgent.id] } });
+    expect(json<{ name: string }>(updated).name).toBe("完成并标记加急");
+    const labelOnly = await app.inject({ method: "POST", url: "/api/admin/commit-actions", headers: { cookie: adminCookie }, payload: { name: "标记缺陷", keyword: "bug", state: null, labelIds: [bug.id] } });
+    expect(labelOnly.statusCode).toBe(201);
+
+    const disposable = await app.inject({ method: "POST", url: "/api/admin/commit-actions", headers: { cookie: adminCookie }, payload: { name: "临时开启", keyword: "temporary", state: "OPEN", labelIds: [] } });
+    expect((await app.inject({ method: "DELETE", url: `/api/admin/commit-actions/${json<{ id: number }>(disposable).id}`, headers: { cookie: adminCookie } })).statusCode).toBe(200);
+  });
+
   it("queues an OpenAI-compatible request without blocking issue creation or sending images", async () => {
     aiFetchCalls.length = 0;
     const saved = await app.inject({ method: "PUT", url: "/api/admin/settings", headers: { cookie: adminCookie }, payload: {
@@ -304,16 +328,15 @@ describe.sequential("IssueFlow API", () => {
     } });
   });
 
-  it("groups awaiting acceptance into the open homepage filter and returns all states without a filter", async () => {
+  it("filters the two supported issue states", async () => {
     const prefix = "Homepage state grouping";
     const created = await Promise.all([
       prisma.issue.create({ data: { title: `${prefix} open`, authorId: userAId, state: "OPEN" } }),
-      prisma.issue.create({ data: { title: `${prefix} awaiting`, authorId: userAId, state: "AWAITING_ACCEPTANCE" } }),
       prisma.issue.create({ data: { title: `${prefix} closed`, authorId: userAId, state: "CLOSED", closedAt: new Date() } }),
     ]);
     const open = await app.inject({ method: "GET", url: `/api/issues?state=OPEN&q=${encodeURIComponent(prefix)}&pageSize=100`, headers: { cookie: userACookie } });
     expect(open.statusCode).toBe(200);
-    expect(json<{ items: Array<{ id: number }> }>(open).items.map(({ id }) => id).sort((a, b) => a - b)).toEqual(created.slice(0, 2).map(({ id }) => id).sort((a, b) => a - b));
+    expect(json<{ items: Array<{ id: number }> }>(open).items.map(({ id }) => id)).toEqual([created[0]!.id]);
 
     const all = await app.inject({ method: "GET", url: `/api/issues?q=${encodeURIComponent(prefix)}&pageSize=100`, headers: { cookie: userACookie } });
     expect(all.statusCode).toBe(200);
@@ -387,17 +410,15 @@ describe.sequential("IssueFlow API", () => {
     expect(json<{ error: { code: string } }>(countRejected).error.code).toBe("ATTACHMENT_LIMIT_REACHED");
   });
 
-  it("allows an assignee to move an issue through awaiting acceptance and closed states but rejects content edits", async () => {
+  it("allows an assignee to close an issue but rejects content edits", async () => {
     const comment = await app.inject({ method: "POST", url: `/api/issues/${issueId}/comments`, headers: { cookie: userBCookie }, payload: { body: "I am on it" } });
     expect(comment.statusCode).toBe(201);
     const detail = await app.inject({ method: "GET", url: `/api/issues/${issueId}`, headers: { cookie: userBCookie } });
     const updatedAt = json<{ updatedAt: string }>(detail).updatedAt;
-    const awaiting = await app.inject({ method: "PATCH", url: `/api/issues/${issueId}`, headers: { cookie: userBCookie }, payload: { state: "AWAITING_ACCEPTANCE", updatedAt } });
-    expect(awaiting.statusCode).toBe(200);
-    expect(json<{ state: string; closedAt: string | null }>(awaiting)).toMatchObject({ state: "AWAITING_ACCEPTANCE", closedAt: null });
-    expect(await prisma.timelineEvent.count({ where: { issueId, type: "ISSUE_AWAITING_ACCEPTANCE" } })).toBe(1);
-    const closed = await app.inject({ method: "PATCH", url: `/api/issues/${issueId}`, headers: { cookie: userBCookie }, payload: { state: "CLOSED", updatedAt: json<{ updatedAt: string }>(awaiting).updatedAt } });
+    const closed = await app.inject({ method: "PATCH", url: `/api/issues/${issueId}`, headers: { cookie: userBCookie }, payload: { state: "CLOSED", updatedAt } });
     expect(closed.statusCode).toBe(200);
+    expect(json<{ state: string; closedAt: string | null }>(closed)).toMatchObject({ state: "CLOSED" });
+    expect(await prisma.timelineEvent.count({ where: { issueId, type: "ISSUE_CLOSED" } })).toBe(1);
     const edit = await app.inject({ method: "PATCH", url: `/api/issues/${issueId}`, headers: { cookie: userBCookie }, payload: { title: "Hijacked", updatedAt: json<{ updatedAt: string }>(closed).updatedAt } });
     expect(edit.statusCode).toBe(403);
   });
@@ -407,7 +428,6 @@ describe.sequential("IssueFlow API", () => {
     expect(anonymous.statusCode).toBe(401);
     expect((await app.inject({ method: "GET", url: "/api/issues/export.xlsx", headers: { cookie: userACookie } })).statusCode).toBe(400);
     const openIssue = await prisma.issue.create({ data: { title: "Broken open export", body: "Always include", authorId: userAId } });
-    const awaitingIssue = await prisma.issue.create({ data: { title: "Broken awaiting export", body: "Always include pending acceptance", authorId: userAId, state: "AWAITING_ACCEPTANCE" } });
     const outsideClosedIssue = await prisma.issue.create({ data: { title: "Broken old closed export", body: "Outside range", authorId: userAId, state: "CLOSED", closedAt: new Date("2020-01-15T12:00:00.000Z") } });
     const closedFrom = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const closedTo = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
@@ -424,9 +444,8 @@ describe.sequential("IssueFlow API", () => {
     const exportedTitles = Array.from({ length: sheet?.rowCount ?? 0 }, (_, index) => sheet!.getCell(index + 1, 1)).filter((cell) => cell.master.address === cell.address).map((cell) => cell.value).filter((value): value is string => typeof value === "string" && value.startsWith("#"));
     expect(exportedTitles).toContain(`#${issueId} Broken flow`);
     expect(exportedTitles).toContain(`#${openIssue.id} Broken open export`);
-    expect(exportedTitles).toContain(`#${awaitingIssue.id} Broken awaiting export`);
     expect(exportedTitles).not.toContain(`#${outsideClosedIssue.id} Broken old closed export`);
-    expect(exportedTitles).toHaveLength(3);
+    expect(exportedTitles).toHaveLength(2);
     expect(sheet?.getImages().length).toBe(1);
     expect(workbook.getWorksheet("用户反馈跟踪记录")?.getRow(1).values).toEqual([undefined, "问题描述", "类型", "优先级", "状态", "反馈者", "跟进人", "附件", "反馈时间", "备注说明"]);
   });
@@ -528,7 +547,7 @@ describe.sequential("IssueFlow API", () => {
     expect(json<{ references: Array<{ commitSha: string }> }>(references).references[0]?.commitSha).toBe("abc123");
   });
 
-  it("closes and reopens issues from Yunxiao push commit commands", async () => {
+  it("applies configurable state and label actions from Yunxiao push commits", async () => {
     const issue = await prisma.issue.create({ data: { title: "Yunxiao commit commands", authorId: userAId, subscriptions: { create: { userId: userAId } } } });
     const headers = { "x-codeup-token": "hook-plain-secret", "x-codeup-event": "Push Hook" };
     const push = (deliveryId: string, sha: string, message: string) => app.inject({
@@ -543,29 +562,21 @@ describe.sequential("IssueFlow API", () => {
       },
     });
 
-    const closed = await push("push-command-close", "close456", `完成开发 #C${issue.id}`);
+    const closed = await push("push-command-close", "close456", `完成开发 #done${issue.id}`);
     expect(closed.statusCode).toBe(202);
     expect((await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } })).state).toBe("CLOSED");
     expect((await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } })).closedAt).not.toBeNull();
     expect(await prisma.codeReference.count({ where: { issueId: issue.id, type: "COMMIT", externalId: "close456" } })).toBe(1);
     expect(await prisma.timelineEvent.count({ where: { issueId: issue.id, type: "ISSUE_CLOSED_BY_YUNXIAO_COMMIT" } })).toBe(1);
     expect(await prisma.notification.count({ where: { issueId: issue.id, userId: userAId, type: "YUNXIAO_COMMIT_CLOSED" } })).toBe(1);
+    expect((await prisma.issueLabel.findMany({ where: { issueId: issue.id }, include: { label: true } })).map(({ label }) => label.name)).toContain("urgent");
 
     const repeatedClose = await push("push-command-close-again", "close789", `无需重复关闭 #c${issue.id}`);
     expect(repeatedClose.statusCode).toBe(202);
     expect(await prisma.timelineEvent.count({ where: { issueId: issue.id, type: "ISSUE_CLOSED_BY_YUNXIAO_COMMIT" } })).toBe(1);
     expect(await prisma.notification.count({ where: { issueId: issue.id, type: "YUNXIAO_COMMIT_CLOSED" } })).toBe(1);
 
-    const awaiting = await push("push-command-awaiting", "awaiting456", `提交验收 #a${issue.id}`);
-    expect(awaiting.statusCode).toBe(202);
-    const awaitingIssue = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
-    expect(awaitingIssue.state).toBe("AWAITING_ACCEPTANCE");
-    expect(awaitingIssue.closedAt).toBeNull();
-    expect(await prisma.codeReference.count({ where: { issueId: issue.id, type: "COMMIT", externalId: "awaiting456" } })).toBe(1);
-    expect(await prisma.timelineEvent.count({ where: { issueId: issue.id, type: "ISSUE_AWAITING_ACCEPTANCE_BY_YUNXIAO_COMMIT" } })).toBe(1);
-    expect(await prisma.notification.count({ where: { issueId: issue.id, userId: userAId, type: "YUNXIAO_COMMIT_AWAITING_ACCEPTANCE" } })).toBe(1);
-
-    const reopened = await push("push-command-open", "open456", `先待验收 #a${issue.id}，最终开启 #o${issue.id}`);
+    const reopened = await push("push-command-open", "open456", `重新打开并标记缺陷 #o${issue.id} #bug${issue.id}`);
     expect(reopened.statusCode).toBe(202);
     const reopenedIssue = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
     expect(reopenedIssue.state).toBe("OPEN");
@@ -573,6 +584,12 @@ describe.sequential("IssueFlow API", () => {
     expect(await prisma.codeReference.count({ where: { issueId: issue.id, type: "COMMIT", externalId: "open456" } })).toBe(1);
     expect(await prisma.timelineEvent.count({ where: { issueId: issue.id, type: "ISSUE_REOPENED_BY_YUNXIAO_COMMIT" } })).toBe(1);
     expect(await prisma.notification.count({ where: { issueId: issue.id, userId: userAId, type: "YUNXIAO_COMMIT_REOPENED" } })).toBe(1);
+    expect((await prisma.issueLabel.findMany({ where: { issueId: issue.id }, include: { label: true } })).map(({ label }) => label.name).sort()).toEqual(["bug", "urgent"]);
+
+    const lastStateWins = await push("push-command-last-state", "state456", `先关闭再打开 #c${issue.id} #o${issue.id}`);
+    expect(lastStateWins.statusCode).toBe(202);
+    expect((await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } })).state).toBe("OPEN");
+    expect(await prisma.timelineEvent.count({ where: { issueId: issue.id, type: "ISSUE_CLOSED_BY_YUNXIAO_COMMIT" } })).toBe(1);
 
     const referenced = await push("push-command-reference-only", "ref456", `普通引用 #${issue.id}`);
     expect(referenced.statusCode).toBe(202);
@@ -589,8 +606,6 @@ describe.sequential("IssueFlow API", () => {
     const opened = await app.inject({ method: "POST", url: "/api/integrations/yunxiao/webhook", headers: { "x-codeup-token": "hook-plain-secret", "x-codeup-event-uuid": "mr-open-27" }, payload: openedPayload });
     expect(opened.statusCode).toBe(202);
     expect((await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } })).state).toBe("OPEN");
-    await prisma.issue.update({ where: { id: issue.id }, data: { state: "AWAITING_ACCEPTANCE" } });
-
     const mergedPayload = { ...openedPayload, objectAttributes: { ...openedPayload.objectAttributes, state: "merged", action: "merge" } };
     const mergedHeaders = { "x-codeup-token": "hook-plain-secret", "x-codeup-event": "Merge Request Hook", "x-codeup-event-uuid": "mr-merged-27" };
     const merged = await app.inject({ method: "POST", url: "/api/integrations/yunxiao/webhook", headers: mergedHeaders, payload: mergedPayload });

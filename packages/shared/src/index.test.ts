@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { changePasswordSchema, createApiTokenSchema, createIssueSchema, issueExportQuerySchema, issueQuerySchema, labelSchema, registerUserSchema, updateProfileSchema, updateUserSchema, yunxiaoIntegrationSchema } from "./index";
+import { changePasswordSchema, commitActionSchema, createApiTokenSchema, createIssueSchema, issueExportQuerySchema, issueQuerySchema, labelSchema, registerUserSchema, updateProfileSchema, updateUserSchema, yunxiaoIntegrationSchema } from "./index";
 
 describe("shared API schemas", () => {
   it("trims and validates issue titles", () => {
@@ -9,7 +9,7 @@ describe("shared API schemas", () => {
 
   it("coerces pagination query values", () => {
     expect(issueQuerySchema.parse({ page: "2", pageSize: "25" })).toMatchObject({ page: 2, pageSize: 25 });
-    expect(issueQuerySchema.parse({ state: "AWAITING_ACCEPTANCE" }).state).toBe("AWAITING_ACCEPTANCE");
+    expect(issueQuerySchema.safeParse({ state: "AWAITING_ACCEPTANCE" }).success).toBe(false);
     expect(issueQuerySchema.parse({ labelIds: "2,3,2" }).labelIds).toEqual([2, 3]);
   });
 
@@ -39,6 +39,11 @@ describe("shared API schemas", () => {
   it("only accepts six digit label colors", () => {
     expect(labelSchema.safeParse({ name: "bug", color: "d73a4a" }).success).toBe(true);
     expect(labelSchema.safeParse({ name: "bug", color: "red" }).success).toBe(false);
+  });
+
+  it("requires commit actions to change state or add labels", () => {
+    expect(commitActionSchema.parse({ name: "关闭", keyword: "C", state: "CLOSED" }).keyword).toBe("c");
+    expect(commitActionSchema.safeParse({ name: "空操作", keyword: "noop", state: null, labelIds: [] }).success).toBe(false);
   });
 
   it("validates Yunxiao edition-specific configuration and strips a trailing slash", () => {

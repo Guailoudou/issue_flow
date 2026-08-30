@@ -8,6 +8,7 @@ import { createRepositoryWebhook, testRepository, type YunxiaoFetch } from "./cl
 import { decryptSecret, encryptSecret, requireEncryptionKey, safeSecretEqual } from "./crypto";
 
 type JsonObject = Record<string, unknown>;
+type CommitActionConfig = Prisma.CommitActionGetPayload<{ include: { labels: { select: { labelId: true } } } }>;
 
 export interface YunxiaoRouteOptions {
   encryptionKey?: string;
@@ -74,19 +75,37 @@ function allIssueIds(text: string) {
   return [...new Set([...text.matchAll(/#(\d+)\b/g)].map((match) => Number(match[1])).filter(Number.isSafeInteger))];
 }
 
-function pushIssueIds(text: string) {
-  return [...new Set([...text.matchAll(/#(?:[coa])?(\d+)\b/gi)].map((match) => Number(match[1])).filter(Number.isSafeInteger))];
+function commitActionPattern(actions: CommitActionConfig[]) {
+  if (!actions.length) return null;
+  const keywords = actions.map(({ keyword }) => keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).sort((a, b) => b.length - a.length);
+  return new RegExp(`#(${keywords.join("|")})(\\d+)\\b`, "gi");
 }
 
-function pushIssueCommands(text: string) {
-  const commands = new Map<number, "CLOSED" | "OPEN" | "AWAITING_ACCEPTANCE">();
-  for (const match of text.matchAll(/#([coa])(\d+)\b/gi)) {
+function pushIssueActions(text: string, actions: CommitActionConfig[]) {
+  const pattern = commitActionPattern(actions);
+  if (!pattern) return [];
+  const byKeyword = new Map(actions.map((action) => [action.keyword, action]));
+  return [...text.matchAll(pattern)].flatMap((match) => {
+    const action = byKeyword.get(match[1]?.toLowerCase() ?? "");
     const issueId = Number(match[2]);
-    const command = match[1]?.toLowerCase();
-    if (!command) continue;
-    if (Number.isSafeInteger(issueId)) commands.set(issueId, command === "c" ? "CLOSED" : command === "a" ? "AWAITING_ACCEPTANCE" : "OPEN");
+    return action && Number.isSafeInteger(issueId) ? [{ issueId, action }] : [];
+  });
+}
+
+function combinedPushActions(text: string, actions: CommitActionConfig[]) {
+  const combined = new Map<number, { state: "OPEN" | "CLOSED" | null; labelIds: Set<number>; keywords: string[] }>();
+  for (const { issueId, action } of pushIssueActions(text, actions)) {
+    const current = combined.get(issueId) ?? { state: null, labelIds: new Set<number>(), keywords: [] };
+    if (action.state === "OPEN" || action.state === "CLOSED") current.state = action.state;
+    action.labels.forEach(({ labelId }) => current.labelIds.add(labelId));
+    current.keywords.push(action.keyword);
+    combined.set(issueId, current);
   }
-  return commands;
+  return combined;
+}
+
+function pushIssueIds(text: string, actions: CommitActionConfig[]) {
+  return [...new Set([...allIssueIds(text), ...pushIssueActions(text, actions).map(({ issueId }) => issueId)])];
 }
 
 function closingIssueIds(text: string) {
@@ -121,22 +140,23 @@ async function processPush(tx: Prisma.TransactionClient, payload: JsonObject, in
   if (!commits.length && firstString(payload.after, payload.checkout_sha, payload.checkoutSha)) {
     commits.push({ id: firstString(payload.after, payload.checkout_sha, payload.checkoutSha), message: firstString(payload.message) });
   }
-  const candidateIds = [...new Set(commits.flatMap((commit) => pushIssueIds(`${firstString(commit.message, commit.title)} ${ref}`)))];
+  const actions = await tx.commitAction.findMany({ include: { labels: { select: { labelId: true } } } });
+  const candidateIds = [...new Set(commits.flatMap((commit) => pushIssueIds(`${firstString(commit.message, commit.title)} ${ref}`, actions)))];
   const validIds = await existingIssueIds(tx, candidateIds);
-  const hasCommands = commits.some((commit) => pushIssueCommands(firstString(commit.message, commit.title)).size > 0);
+  const hasCommands = commits.some((commit) => pushIssueActions(firstString(commit.message, commit.title), actions).length > 0);
   const actor = hasCommands ? await tx.user.findFirst({ where: { role: "ADMIN" }, select: { id: true } }) : null;
   if (hasCommands && !actor) throw new ApiError(503, "ADMIN_REQUIRED", "The integration requires an administrator account");
   let references = 0;
   let closedIssues = 0;
   let reopenedIssues = 0;
-  let awaitingAcceptanceIssues = 0;
+  let labeledIssues = 0;
   for (const commit of commits) {
     const sha = firstString(commit.id, commit.sha, commit.commitId);
     if (!sha) continue;
     const message = firstString(commit.message, commit.title) || sha.slice(0, 12);
     const author = firstObject(commit.author);
     const url = firstString(commit.url, commit.web_url, commit.webUrl) || (repositoryWebUrl(payload, integration) ? `${repositoryWebUrl(payload, integration)}/commit/${sha}` : "");
-    for (const issueId of pushIssueIds(`${message} ${ref}`).filter((id) => validIds.has(id))) {
+    for (const issueId of pushIssueIds(`${message} ${ref}`, actions).filter((id) => validIds.has(id))) {
       await tx.codeReference.upsert({
         where: { issueId_type_externalId: { issueId, type: "COMMIT", externalId: sha } },
         create: { issueId, type: "COMMIT", externalId: sha, title: message.slice(0, 500), url, status: "PUSHED", sourceBranch: ref || null, authorName: firstString(author.name, commit.author_name, commit.authorName) || null, commitSha: sha },
@@ -144,36 +164,28 @@ async function processPush(tx: Prisma.TransactionClient, payload: JsonObject, in
       });
       references += 1;
     }
-    for (const [issueId, state] of pushIssueCommands(message)) {
+    for (const [issueId, action] of combinedPushActions(message, actions)) {
       if (!validIds.has(issueId)) continue;
-      const changed = await tx.issue.updateMany({
-        where: { id: issueId, state: { not: state } },
-        data: { state, closedAt: state === "CLOSED" ? new Date() : null },
-      });
-      if (!changed.count) continue;
-      await tx.timelineEvent.create({
-        data: {
-          issueId,
-          actorId: actor!.id,
-          type: state === "CLOSED" ? "ISSUE_CLOSED_BY_YUNXIAO_COMMIT" : state === "AWAITING_ACCEPTANCE" ? "ISSUE_AWAITING_ACCEPTANCE_BY_YUNXIAO_COMMIT" : "ISSUE_REOPENED_BY_YUNXIAO_COMMIT",
-          data: timelineData({ commitSha: sha, title: message.slice(0, 500), url, source: "YUNXIAO" }),
-        },
-      });
-      const subscriptions = await tx.subscription.findMany({ where: { issueId }, select: { userId: true } });
-      if (subscriptions.length) await tx.notification.createMany({
-        data: subscriptions.map(({ userId }) => ({
-          userId,
-          issueId,
-          type: state === "CLOSED" ? "YUNXIAO_COMMIT_CLOSED" : state === "AWAITING_ACCEPTANCE" ? "YUNXIAO_COMMIT_AWAITING_ACCEPTANCE" : "YUNXIAO_COMMIT_REOPENED",
-          message: `Issue #${issueId} was ${state === "CLOSED" ? "closed" : state === "AWAITING_ACCEPTANCE" ? "marked as awaiting acceptance" : "reopened"} by Yunxiao commit: ${message}`.slice(0, 1000),
-        })),
-      });
-      if (state === "CLOSED") closedIssues += 1;
-      else if (state === "AWAITING_ACCEPTANCE") awaitingAcceptanceIssues += 1;
-      else reopenedIssues += 1;
+      const state = action.state;
+      const stateChanged = state ? await tx.issue.updateMany({ where: { id: issueId, state: { not: state } }, data: { state, closedAt: state === "CLOSED" ? new Date() : null } }) : { count: 0 };
+      const configuredLabelIds = [...action.labelIds];
+      const existingLabelIds = configuredLabelIds.length ? new Set((await tx.issueLabel.findMany({ where: { issueId, labelId: { in: configuredLabelIds } }, select: { labelId: true } })).map(({ labelId }) => labelId)) : new Set<number>();
+      const addedLabelIds = configuredLabelIds.filter((labelId) => !existingLabelIds.has(labelId));
+      if (addedLabelIds.length) {
+        await tx.issueLabel.createMany({ data: addedLabelIds.map((labelId) => ({ issueId, labelId })) });
+        await tx.timelineEvent.create({ data: { issueId, actorId: actor!.id, type: "LABELS_CHANGED", data: timelineData({ added: addedLabelIds, removed: [], action: action.keywords.join(","), source: "YUNXIAO" }) } });
+        labeledIssues += 1;
+      }
+      if (stateChanged.count) {
+        await tx.timelineEvent.create({ data: { issueId, actorId: actor!.id, type: state === "CLOSED" ? "ISSUE_CLOSED_BY_YUNXIAO_COMMIT" : "ISSUE_REOPENED_BY_YUNXIAO_COMMIT", data: timelineData({ commitSha: sha, title: message.slice(0, 500), url, action: action.keywords.join(","), source: "YUNXIAO" }) } });
+        const subscriptions = await tx.subscription.findMany({ where: { issueId }, select: { userId: true } });
+        if (subscriptions.length) await tx.notification.createMany({ data: subscriptions.map(({ userId }) => ({ userId, issueId, type: state === "CLOSED" ? "YUNXIAO_COMMIT_CLOSED" : "YUNXIAO_COMMIT_REOPENED", message: `Issue #${issueId} was ${state === "CLOSED" ? "closed" : "reopened"} by Yunxiao commit: ${message}`.slice(0, 1000) })) });
+        if (state === "CLOSED") closedIssues += 1;
+        else reopenedIssues += 1;
+      }
     }
   }
-  return { references, closedIssues, reopenedIssues, awaitingAcceptanceIssues, commits: commits.length };
+  return { references, closedIssues, reopenedIssues, labeledIssues, commits: commits.length };
 }
 
 async function notifyExternalClose(tx: Prisma.TransactionClient, issueId: number, mrTitle: string) {

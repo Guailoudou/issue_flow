@@ -21,6 +21,7 @@ const ForbiddenPage = lazyPage(() => import('./pages/StatePages'), 'ForbiddenPag
 const NotFoundPage = lazyPage(() => import('./pages/StatePages'), 'NotFoundPage');
 const AdminDashboardPage = lazyPage(() => import('./pages/admin/AdminDashboardPage'), 'AdminDashboardPage');
 const AdminLabelsPage = lazyPage(() => import('./pages/admin/AdminLabelsPage'), 'AdminLabelsPage');
+const AdminCommitActionsPage = lazyPage(() => import('./pages/admin/AdminCommitActionsPage'), 'AdminCommitActionsPage');
 const AdminMilestonesPage = lazyPage(() => import('./pages/admin/AdminMilestonesPage'), 'AdminMilestonesPage');
 const AdminSettingsPage = lazyPage(() => import('./pages/admin/AdminSettingsPage'), 'AdminSettingsPage');
 const AdminUsersPage = lazyPage(() => import('./pages/admin/AdminUsersPage'), 'AdminUsersPage');
@@ -51,6 +52,7 @@ export function App() {
                 <Route index element={<AdminDashboardPage />} />
                 <Route path="users" element={<AdminUsersPage />} />
                 <Route path="labels" element={<AdminLabelsPage />} />
+                <Route path="commit-actions" element={<AdminCommitActionsPage />} />
                 <Route path="milestones" element={<AdminMilestonesPage />} />
                 <Route path="yunxiao" element={<AdminYunxiaoPage />} />
                 <Route path="settings" element={<AdminSettingsPage />} />

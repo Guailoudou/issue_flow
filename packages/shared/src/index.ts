@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const USER_ROLES = ["ADMIN", "USER"] as const;
 export const BUSINESS_ROLES = ["MANAGEMENT", "DEVELOPMENT", "PRODUCT"] as const;
-export const ISSUE_STATES = ["OPEN", "AWAITING_ACCEPTANCE", "CLOSED"] as const;
+export const ISSUE_STATES = ["OPEN", "CLOSED"] as const;
 export const MILESTONE_STATES = ["OPEN", "CLOSED"] as const;
 export const SORT_FIELDS = ["createdAt", "updatedAt"] as const;
 export const YUNXIAO_EDITIONS = ["CENTRAL", "REGION"] as const;
@@ -63,6 +63,12 @@ export const labelSchema = z.object({
   description: z.string().max(200).default(""),
   color: z.string().regex(/^[0-9a-fA-F]{6}$/),
 });
+export const commitActionSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  keyword: z.string().trim().toLowerCase().regex(/^[a-z][a-z_-]{0,15}$/),
+  state: z.enum(ISSUE_STATES).nullable().default(null),
+  labelIds: z.array(idSchema).max(30).default([]),
+}).refine((value) => value.state !== null || value.labelIds.length > 0, { message: "A commit action must change the issue state or add at least one label" });
 export const milestoneSchema = z.object({
   title: z.string().trim().min(1).max(100),
   description: z.string().max(1000).default(""),
@@ -143,6 +149,7 @@ export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
 export type PlatformSettingInput = z.infer<typeof platformSettingSchema>;
 export type AdminPlatformSettingInput = z.infer<typeof adminPlatformSettingSchema>;
 export type LabelInput = z.infer<typeof labelSchema>;
+export type CommitActionInput = z.infer<typeof commitActionSchema>;
 export type MilestoneInput = z.infer<typeof milestoneSchema>;
 export type CreateIssueInput = z.infer<typeof createIssueSchema>;
 export type UpdateIssueInput = z.infer<typeof updateIssueSchema>;

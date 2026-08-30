@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
-import { adminPlatformSettingSchema, createUserSchema, labelSchema, milestoneSchema, resetPasswordSchema, updateUserRolesSchema, updateUserSchema } from "@issueflow/shared";
+import { adminPlatformSettingSchema, commitActionSchema, createUserSchema, labelSchema, milestoneSchema, resetPasswordSchema, updateUserRolesSchema, updateUserSchema } from "@issueflow/shared";
 import { ApiError } from "../errors";
 import { parseId, publicUser } from "../utils";
 import { encryptAiApiKey, type AiOptions } from "../ai/labeler";
@@ -82,6 +82,37 @@ export async function adminRoutes(app: FastifyInstance, prisma: PrismaClient, ai
   app.put("/admin/labels/:id", { preHandler: app.requireAdmin }, async (request) => prisma.label.update({ where: { id: parseId((request.params as { id: string }).id) }, data: labelSchema.parse(request.body) }));
   app.delete("/admin/labels/:id", { preHandler: app.requireAdmin }, async (request) => { await prisma.label.delete({ where: { id: parseId((request.params as { id: string }).id) } }); return { ok: true }; });
 
+  app.get("/admin/commit-actions", { preHandler: app.requireAdmin }, async () => ({
+    items: await prisma.commitAction.findMany({ orderBy: [{ isSystem: "desc" }, { createdAt: "asc" }], include: { labels: { include: { label: true } } } }),
+  }));
+  app.post("/admin/commit-actions", { preHandler: app.requireAdmin }, async (request, reply) => {
+    const input = commitActionSchema.parse(request.body);
+    const labelIds = [...new Set(input.labelIds)];
+    if (await prisma.label.count({ where: { id: { in: labelIds } } }) !== labelIds.length) throw new ApiError(400, "INVALID_LABEL", "One or more labels do not exist");
+    reply.status(201);
+    return prisma.commitAction.create({ data: { name: input.name, keyword: input.keyword, state: input.state, labels: { create: labelIds.map((labelId) => ({ labelId })) } }, include: { labels: { include: { label: true } } } });
+  });
+  app.put("/admin/commit-actions/:id", { preHandler: app.requireAdmin }, async (request) => {
+    const id = parseId((request.params as { id: string }).id);
+    const input = commitActionSchema.parse(request.body);
+    const labelIds = [...new Set(input.labelIds)];
+    if (await prisma.label.count({ where: { id: { in: labelIds } } }) !== labelIds.length) throw new ApiError(400, "INVALID_LABEL", "One or more labels do not exist");
+    return prisma.$transaction(async (tx) => {
+      await tx.commitAction.update({ where: { id }, data: { name: input.name, keyword: input.keyword, state: input.state } });
+      await tx.commitActionLabel.deleteMany({ where: { actionId: id } });
+      if (labelIds.length) await tx.commitActionLabel.createMany({ data: labelIds.map((labelId) => ({ actionId: id, labelId })) });
+      return tx.commitAction.findUniqueOrThrow({ where: { id }, include: { labels: { include: { label: true } } } });
+    });
+  });
+  app.delete("/admin/commit-actions/:id", { preHandler: app.requireAdmin }, async (request) => {
+    const id = parseId((request.params as { id: string }).id);
+    const action = await prisma.commitAction.findUnique({ where: { id } });
+    if (!action) throw new ApiError(404, "COMMIT_ACTION_NOT_FOUND", "Commit action not found");
+    if (action.isSystem) throw new ApiError(409, "SYSTEM_COMMIT_ACTION", "System commit actions cannot be deleted");
+    await prisma.commitAction.delete({ where: { id } });
+    return { ok: true };
+  });
+
   app.get("/milestones", { preHandler: app.authenticate }, async () => ({ items: await prisma.milestone.findMany({ orderBy: { createdAt: "desc" }, include: { _count: { select: { issues: true } } } }) }));
   app.post("/admin/milestones", { preHandler: app.requireAdmin }, async (request, reply) => {
     const input = milestoneSchema.parse(request.body); reply.status(201);
@@ -96,7 +127,7 @@ export async function adminRoutes(app: FastifyInstance, prisma: PrismaClient, ai
   app.get("/admin/stats", { preHandler: app.requireAdmin }, async () => {
     const since = new Date(Date.now() - 7 * 86400000);
     const [users, activeUsers, openIssues, closedIssues, recentIssues, recentComments, activity] = await Promise.all([
-      prisma.user.count(), prisma.user.count({ where: { active: true } }), prisma.issue.count({ where: { state: { in: ["OPEN", "AWAITING_ACCEPTANCE"] } } }),
+      prisma.user.count(), prisma.user.count({ where: { active: true } }), prisma.issue.count({ where: { state: "OPEN" } }),
       prisma.issue.count({ where: { state: "CLOSED" } }), prisma.issue.count({ where: { createdAt: { gte: since } } }),
       prisma.comment.count({ where: { createdAt: { gte: since } } }), prisma.timelineEvent.findMany({ take: 10, orderBy: { createdAt: "desc" }, include: { actor: true, issue: { select: { id: true, title: true } } } }),
     ]);

@@ -20,7 +20,7 @@ function issueWhere(query: ReturnType<typeof issueExportQuerySchema.parse>): Pri
     ...(query.q ? { OR: [{ title: { contains: query.q } }, { body: { contains: query.q } }] } : {}),
   };
   return { AND: [commonFilters, { OR: [
-    { state: { in: ["OPEN", "AWAITING_ACCEPTANCE"] } },
+    { state: "OPEN" },
     { state: "CLOSED", closedAt: { gte: new Date(query.closedFrom), lte: new Date(query.closedTo) } },
   ] }] };
 }
@@ -73,15 +73,14 @@ async function createWorkbook(prisma: PrismaClient, uploadDir: string, query: Re
     const start = sheet.rowCount + 1;
     const end = start + 1;
     const delivered = issue.state === "CLOSED";
-    const awaitingAcceptance = issue.state === "AWAITING_ACCEPTANCE";
     const notes = [
       issue.labels.length ? `标签：${issue.labels.map(({ label }) => label.name).join("、")}` : "",
       issue.milestone ? `里程碑：${issue.milestone.title}` : "",
       issue.attachments.length ? `附件：${issue.attachments.length} 个` : "",
     ].filter(Boolean).join("\n");
     const values: Array<string | number | Date | null> = [
-      `#${issue.id} ${issue.title}`, issue.assignees.filter(({ ownerType }) => ownerType === "PRODUCT").map(({ user }) => user.displayName).join("、"), delivered ? "已交付" : awaitingAcceptance ? "待验收" : "开放", issue.body, "", notes,
-      issue.assignees.filter(({ ownerType }) => ownerType === "DEVELOPMENT").map(({ user }) => user.displayName).join("、"), delivered ? "已交付" : awaitingAcceptance ? "待验收" : "开发中", "",
+      `#${issue.id} ${issue.title}`, issue.assignees.filter(({ ownerType }) => ownerType === "PRODUCT").map(({ user }) => user.displayName).join("、"), delivered ? "已交付" : "开放", issue.body, "", notes,
+      issue.assignees.filter(({ ownerType }) => ownerType === "DEVELOPMENT").map(({ user }) => user.displayName).join("、"), delivered ? "已交付" : "开发中", "",
       issue.createdAt, issue.closedAt, delivered ? 1 : 0, "", delivered ? 1 : 0,
     ];
     for (let column = 1; column <= HEADERS.length; column += 1) {

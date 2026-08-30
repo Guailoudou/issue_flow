@@ -131,7 +131,7 @@ curl -sS "$ISSUEFLOW_API_BASE/issues?page=1&pageSize=20&sort=updatedAt&order=des
 
 | 参数 | 说明 |
 | --- | --- |
-| `state` | `OPEN`、`AWAITING_ACCEPTANCE`、`CLOSED`；省略表示全部状态。查询 `OPEN` 时同时返回开放和待验收 Issue。 |
+| `state` | `OPEN` 或 `CLOSED`；省略表示全部状态。 |
 | `q` | 搜索标题和正文。 |
 | `authorId` | 按创建人筛选。 |
 | `assigneeId` | 按负责人筛选。 |
@@ -175,12 +175,12 @@ curl -sS -X PATCH "$ISSUEFLOW_API_BASE/issues/4" \
   -H "Authorization: Bearer $ISSUEFLOW_API_TOKEN" \
   -H 'Content-Type: application/json' \
   --data '{
-    "state": "AWAITING_ACCEPTANCE",
+    "state": "CLOSED",
     "updatedAt": "2026-08-29T08:00:00.000Z"
   }'
 ```
 
-状态可取 `OPEN`、`AWAITING_ACCEPTANCE`、`CLOSED`。内容编辑权限与网页端一致；状态、负责人、标签和里程碑的管理权限也沿用当前账户权限。版本过期时返回 `409 STALE_UPDATE`，应重新读取 Issue 后再提交。
+状态可取 `OPEN`、`CLOSED`。内容编辑权限与网页端一致；状态、负责人、标签和里程碑的管理权限也沿用当前账户权限。版本过期时返回 `409 STALE_UPDATE`，应重新读取 Issue 后再提交。
 
 ### 添加评论
 
@@ -224,10 +224,12 @@ curl -fL "$ISSUEFLOW_API_BASE/attachments/18/content" \
 | `POST` | `/api/notifications/read-all` | 将全部通知标记为已读。 |
 | `GET` | `/api/version` | 查询后端版本。 |
 | `GET` | `/api/admin/stats` | 管理员统计，仅管理员 Token 可用。 |
+| `GET/POST` | `/api/admin/commit-actions` | 查询或创建提交操作，仅管理后台可用。 |
+| `PUT/DELETE` | `/api/admin/commit-actions/{id}` | 编辑或删除自定义提交操作；系统默认操作不可删除。 |
 
 管理员可通过 `PATCH /api/admin/users/{id}` 并发送 `{"username":"new_username"}` 修改其他用户的用户名。用户名必须为 3–40 位，只能包含字母、数字、下划线和连字符；不能通过该接口修改当前管理员自己的用户名。
 
-Issue 表格导出使用 `GET /api/issues/export.xlsx`，必须同时传入 ISO 8601 格式的 `closedFrom` 与 `closedTo`。开放和待验收 Issue 不受此时间范围限制，已关闭 Issue 按关闭时间筛选。下载二进制响应时可使用 `curl -OJ` 或 `-o 文件名.xlsx`。
+Issue 表格导出使用 `GET /api/issues/export.xlsx`，必须同时传入 ISO 8601 格式的 `closedFrom` 与 `closedTo`。开放 Issue 不受此时间范围限制，已关闭 Issue 按关闭时间筛选。下载二进制响应时可使用 `curl -OJ` 或 `-o 文件名.xlsx`。
 
 ## 5. 错误响应
 

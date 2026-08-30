@@ -196,6 +196,7 @@ model Label {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   issues      IssueLabel[]
+  commitActions CommitActionLabel[]
 }
 
 model IssueLabel {
@@ -205,6 +206,27 @@ model IssueLabel {
   label   Label @relation(fields: [labelId], references: [id], onDelete: Cascade)
 
   @@id([issueId, labelId])
+  @@index([labelId])
+}
+
+model CommitAction {
+  id        Int                 @id @default(autoincrement())
+  name      String
+  keyword   String              @unique
+  state     String?
+  isSystem  Boolean             @default(false)
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+  labels    CommitActionLabel[]
+}
+
+model CommitActionLabel {
+  actionId Int
+  labelId  Int
+  action   CommitAction @relation(fields: [actionId], references: [id], onDelete: Cascade)
+  label    Label        @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@id([actionId, labelId])
   @@index([labelId])
 }
 
