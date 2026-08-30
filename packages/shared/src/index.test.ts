@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { changePasswordSchema, commitActionSchema, createApiTokenSchema, createIssueSchema, issueExportQuerySchema, issueQuerySchema, labelSchema, registerUserSchema, updateProfileSchema, updateUserSchema, yunxiaoIntegrationSchema } from "./index";
+import { changePasswordSchema, commitActionSchema, createApiTokenSchema, createIssueSchema, issueExportQuerySchema, issueQuerySchema, labelSchema, ossSettingSchema, registerUserSchema, updateProfileSchema, updateUserSchema, yunxiaoIntegrationSchema } from "./index";
 
 describe("shared API schemas", () => {
   it("trims and validates issue titles", () => {
@@ -53,5 +53,10 @@ describe("shared API schemas", () => {
     expect(yunxiaoIntegrationSchema.safeParse({
       enabled: false, edition: "CENTRAL", baseUrl: "https://example.aliyuncs.com", repositoryId: "repo", organizationId: "",
     }).success).toBe(false);
+  });
+
+  it("normalizes safe S3 endpoints, buckets and object prefixes", () => {
+    expect(ossSettingSchema.parse({ enabled: false, endpoint: "https://s3.oss-cn-hangzhou.aliyuncs.com/", region: "cn-hangzhou", bucket: "issueflow.test", prefix: "/issueflow/attachments/" })).toMatchObject({ endpoint: "https://s3.oss-cn-hangzhou.aliyuncs.com", region: "cn-hangzhou", bucket: "issueflow.test", prefix: "issueflow/attachments", forcePathStyle: false });
+    expect(ossSettingSchema.safeParse({ enabled: false, endpoint: "ftp://example.com", bucket: "issueflow-test", prefix: "../files" }).success).toBe(false);
   });
 });

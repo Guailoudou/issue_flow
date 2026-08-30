@@ -1,9 +1,8 @@
-import { readFile } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import ExcelJS from "exceljs";
 import { issueExportQuerySchema } from "@issueflow/shared";
-import { isPreviewableImageMime, resolveAttachmentPath, resolveUploadDir, type AttachmentRouteOptions } from "./attachments";
+import { isPreviewableImageMime, readAttachmentBuffer, resolveUploadDir, type AttachmentRouteOptions } from "./attachments";
 
 const HEADERS = [
   "产品需求", "产品负责人", "状态", "需求明细", "附件：图片", "备注", "技术责任人", "状态",
@@ -36,7 +35,7 @@ function applyBorders(row: ExcelJS.Row) {
   });
 }
 
-async function createWorkbook(prisma: PrismaClient, uploadDir: string, query: ReturnType<typeof issueExportQuerySchema.parse>) {
+async function createWorkbook(prisma: PrismaClient, uploadDir: string, query: ReturnType<typeof issueExportQuerySchema.parse>, options: AttachmentRouteOptions) {
   const issues = await prisma.issue.findMany({
     where: issueWhere(query), orderBy: { [query.sort]: query.order },
     include: {
@@ -97,7 +96,7 @@ async function createWorkbook(prisma: PrismaClient, uploadDir: string, query: Re
     const firstImage = issue.attachments.find((attachment) => isPreviewableImageMime(attachment.mimeType));
     if (firstImage) {
       try {
-        const buffer = await readFile(resolveAttachmentPath(uploadDir, firstImage.storageName));
+        const buffer = await readAttachmentBuffer(prisma, uploadDir, firstImage, options.oss);
         const extension = firstImage.mimeType === "image/jpeg" ? "jpeg" : firstImage.mimeType.split("/")[1];
         if (["png", "jpeg", "gif", "webp"].includes(extension ?? "")) {
           // ExcelJS can serialize arbitrary OOXML image extensions at runtime; its public type union omits WebP.
@@ -128,7 +127,7 @@ export async function exportRoutes(app: FastifyInstance, prisma: PrismaClient, o
   const uploadDir = resolveUploadDir(options.uploadDir);
   app.get("/issues/export.xlsx", { preHandler: app.authenticate }, async (request, reply) => {
     const query = issueExportQuerySchema.parse(request.query);
-    const workbook = await createWorkbook(prisma, uploadDir, query);
+    const workbook = await createWorkbook(prisma, uploadDir, query, options);
     const buffer = await workbook.xlsx.writeBuffer();
     const date = new Date().toISOString().slice(0, 10);
     const fileName = `需求进度管理-${date}.xlsx`;

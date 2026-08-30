@@ -2,9 +2,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { PrismaClient } from "@prisma/client";
 import ExcelJS from "exceljs";
 import { buildApp } from "./app";
+import type { OssClient } from "./storage/oss";
 
 const prisma = new PrismaClient();
 let app: Awaited<ReturnType<typeof buildApp>>;
@@ -19,6 +21,16 @@ let attachmentId = 0;
 let uploadDir = "";
 const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
 const aiFetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+const ossObjects = new Map<string, Buffer>();
+let ossBucketChecks = 0;
+let s3ClientOptions: { region?: unknown; forcePathStyle?: boolean } | undefined;
+const mockOssClient = {
+  async put(name: string, contents: Buffer) { ossObjects.set(name, Buffer.from(contents)); return {}; },
+  async get(name: string) { return { content: ossObjects.get(name) }; },
+  async getStream(name: string) { const contents = ossObjects.get(name); if (!contents) throw Object.assign(new Error("Not found"), { status: 404 }); return { stream: Readable.from(contents) }; },
+  async delete(name: string) { ossObjects.delete(name); return {}; },
+  async getBucketInfo() { ossBucketChecks += 1; return {}; },
+} as unknown as OssClient;
 let aiFetchGate: Promise<void> | null = null;
 const mockFetch = async (input: string | URL | Request, init?: RequestInit) => {
   fetchCalls.push({ url: String(input), ...(init ? { init } : {}) });
@@ -57,6 +69,7 @@ beforeAll(async () => {
   await prisma.webhookDelivery.deleteMany();
   await prisma.codeReference.deleteMany();
   await prisma.yunxiaoIntegration.deleteMany();
+  await prisma.ossSetting.deleteMany();
   await prisma.notification.deleteMany();
   await prisma.timelineEvent.deleteMany();
   await prisma.comment.deleteMany();
@@ -72,7 +85,7 @@ beforeAll(async () => {
   await prisma.session.deleteMany();
   await prisma.user.deleteMany();
   await prisma.platformSetting.deleteMany();
-  app = await buildApp({ prisma, attachments: { uploadDir }, yunxiao: { encryptionKey: "11".repeat(32), webhookBaseUrl: "https://issues.example.com", fetchImpl: mockFetch, timeoutMs: 100 }, ai: { encryptionKey: "22".repeat(32), fetchImpl: mockAiFetch, timeoutMs: 100 } });
+  app = await buildApp({ prisma, attachments: { uploadDir, oss: { encryptionKey: "11".repeat(32), clientFactory: (options) => { s3ClientOptions = options; return mockOssClient; } } }, yunxiao: { encryptionKey: "11".repeat(32), webhookBaseUrl: "https://issues.example.com", fetchImpl: mockFetch, timeoutMs: 100 }, ai: { encryptionKey: "22".repeat(32), fetchImpl: mockAiFetch, timeoutMs: 100 } });
 });
 afterAll(async () => { if (app) await app.close(); await prisma.$disconnect(); if (uploadDir) await rm(uploadDir, { recursive: true, force: true }); });
 
@@ -421,6 +434,42 @@ describe.sequential("IssueFlow API", () => {
     const countRejected = await app.inject({ method: "POST", url: `/api/issues/${cappedIssue.id}/attachments`, headers: { ...overCount.headers, cookie: userACookie }, payload: overCount.payload });
     expect(countRejected.statusCode).toBe(409);
     expect(json<{ error: { code: string } }>(countRejected).error.code).toBe("ATTACHMENT_LIMIT_REACHED");
+  });
+
+  it("stores new attachments through S3 without changing the attachment API", async () => {
+    expect((await app.inject({ method: "GET", url: "/api/admin/storage/oss", headers: { cookie: userACookie } })).statusCode).toBe(403);
+    const configured = await app.inject({ method: "PUT", url: "/api/admin/storage/oss", headers: { cookie: adminCookie }, payload: {
+      enabled: true, endpoint: "https://s3.oss-cn-hangzhou.aliyuncs.com/", region: "cn-hangzhou", bucket: "issueflow.test", prefix: "/issueflow/attachments/", forcePathStyle: false, accessKeyId: "test-id", accessKeySecret: "test-secret",
+    } });
+    expect(configured.statusCode).toBe(200);
+    expect(json<{ setting: Record<string, unknown> }>(configured).setting).toMatchObject({ enabled: true, endpoint: "https://s3.oss-cn-hangzhou.aliyuncs.com", region: "cn-hangzhou", bucket: "issueflow.test", forcePathStyle: false, prefix: "issueflow/attachments", hasAccessKeyId: true, hasAccessKeySecret: true });
+    expect(JSON.stringify(json(configured))).not.toContain("test-secret");
+    const storedSetting = await prisma.ossSetting.findUniqueOrThrow({ where: { id: 1 } });
+    expect(storedSetting.accessKeySecretEncrypted).not.toContain("test-secret");
+
+    const tested = await app.inject({ method: "POST", url: "/api/admin/storage/oss/test", headers: { cookie: adminCookie } });
+    expect(tested.statusCode).toBe(200);
+    expect(ossBucketChecks).toBe(1);
+    expect(s3ClientOptions).toMatchObject({ region: "cn-hangzhou", forcePathStyle: false });
+
+    const ossIssue = await prisma.issue.create({ data: { title: "OSS attachment", authorId: userAId } });
+    const contents = Buffer.from("stored in oss");
+    const upload = multipartImage(contents, "text/plain", "oss.txt");
+    const uploaded = await app.inject({ method: "POST", url: `/api/issues/${ossIssue.id}/attachments`, headers: { ...upload.headers, cookie: userACookie }, payload: upload.payload });
+    expect(uploaded.statusCode).toBe(201);
+    const attachment = await prisma.issueAttachment.findUniqueOrThrow({ where: { id: json<{ id: number }>(uploaded).id } });
+    expect(attachment.storageType).toBe("OSS");
+    expect(attachment.storageName).toMatch(/^issueflow\/attachments\/[0-9a-f-]{36}\.bin$/);
+    expect(ossObjects.get(attachment.storageName)?.equals(contents)).toBe(true);
+    const downloaded = await app.inject({ method: "GET", url: json<{ url: string }>(uploaded).url, headers: { cookie: userACookie } });
+    expect(downloaded.statusCode).toBe(200);
+    expect(downloaded.rawPayload.equals(contents)).toBe(true);
+    expect((await app.inject({ method: "DELETE", url: `/api/attachments/${attachment.id}`, headers: { cookie: userACookie } })).statusCode).toBe(204);
+    expect(ossObjects.has(attachment.storageName)).toBe(false);
+
+    await app.inject({ method: "PUT", url: "/api/admin/storage/oss", headers: { cookie: adminCookie }, payload: {
+      enabled: false, endpoint: storedSetting.endpoint, region: storedSetting.region, bucket: storedSetting.bucket, prefix: storedSetting.prefix, forcePathStyle: storedSetting.forcePathStyle,
+    } });
   });
 
   it("allows an assignee to close an issue but rejects content edits", async () => {

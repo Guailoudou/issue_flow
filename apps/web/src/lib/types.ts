@@ -39,6 +39,21 @@ export interface YunxiaoIntegrationResponse {
   integration: YunxiaoIntegration;
   webhook: { url: string; events: string[] };
 }
+export interface OssSetting {
+  enabled: boolean;
+  endpoint: string;
+  region: string;
+  bucket: string;
+  prefix: string;
+  forcePathStyle: boolean;
+  hasAccessKeyId: boolean;
+  hasAccessKeySecret: boolean;
+  lastTestedAt?: string | null;
+  lastTestStatus?: string | null;
+  lastTestMessage?: string | null;
+  updatedAt?: string | null;
+}
+export interface OssSettingResponse { setting: OssSetting }
 export interface CodeReference {
   id: EntityId;
   type: 'COMMIT' | 'MERGE_REQUEST';

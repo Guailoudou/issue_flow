@@ -140,6 +140,21 @@ export const yunxiaoTestSchema = z.object({
   token: z.string().trim().min(1).max(4000).optional(),
 });
 
+export const ossSettingSchema = z.object({
+  enabled: z.boolean(),
+  endpoint: z.string().trim().url().max(1000).transform((value) => value.replace(/\/+$/, "")),
+  region: z.string().trim().min(1).max(100).default("us-east-1"),
+  bucket: z.string().trim().regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/, "Invalid S3 bucket name"),
+  prefix: z.string().trim().max(500).transform((value) => value.replace(/^\/+|\/+$/g, "")),
+  forcePathStyle: z.boolean().default(false),
+  accessKeyId: z.string().trim().min(1).max(1000).optional(),
+  accessKeySecret: z.string().trim().min(1).max(4000).optional(),
+}).superRefine((value, context) => {
+  if (!["http:", "https:"].includes(new URL(value.endpoint).protocol)) context.addIssue({ code: "custom", path: ["endpoint"], message: "S3 endpoint must use HTTP or HTTPS" });
+  if (value.bucket.includes("..") || /^\d{1,3}(\.\d{1,3}){3}$/.test(value.bucket)) context.addIssue({ code: "custom", path: ["bucket"], message: "Invalid S3 bucket name" });
+  if (!value.prefix || value.prefix.split("/").some((part) => !part || part === "." || part === "..") || /[\\\u0000-\u001f\u007f]/.test(value.prefix)) context.addIssue({ code: "custom", path: ["prefix"], message: "Invalid S3 object prefix" });
+});
+
 export type LoginInput = z.infer<typeof loginSchema>;
 export type CreateUserInput = z.infer<typeof createUserSchema>;
 export type RegisterUserInput = z.infer<typeof registerUserSchema>;
@@ -157,6 +172,7 @@ export type IssueQuery = z.infer<typeof issueQuerySchema>;
 export type IssueExportQuery = z.infer<typeof issueExportQuerySchema>;
 export type CreateApiTokenInput = z.infer<typeof createApiTokenSchema>;
 export type YunxiaoIntegrationInput = z.infer<typeof yunxiaoIntegrationSchema>;
+export type OssSettingInput = z.infer<typeof ossSettingSchema>;
 
 export interface ApiErrorBody {
   error: { code: string; message: string; requestId: string; details?: unknown };
