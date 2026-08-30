@@ -87,7 +87,7 @@ AI API Key 与云效凭据复用 `YUNXIAO_ENCRYPTION_KEY` 加密；Docker 部署
 
 ## S3 兼容附件存储
 
-管理员可在“管理后台 → S3 存储”配置 Endpoint、Region、Bucket、对象前缀、寻址方式和 AccessKey，并测试 Bucket 连接。支持 AWS S3、阿里云 OSS、MinIO 及其他实现标准 S3 API 的对象存储。启用后新上传的附件写入对象存储；配置前上传的附件仍保留在服务器本地，不会自动迁移。附件列表、下载地址和权限校验保持不变，对象由 API 代理读取，无需公开 Bucket。
+管理员可在“管理后台 → S3 存储”配置 Endpoint、可选 Region、Bucket、对象前缀、寻址方式和 AccessKey，并测试 Bucket 连接；Region 留空时使用 `us-east-1`。支持 AWS S3、阿里云 OSS、MinIO 及其他实现标准 S3 API 的对象存储。关闭 S3 后可清除已保存的 AccessKey 凭据。启用后新上传的附件写入对象存储；配置前上传的附件仍保留在服务器本地，不会自动迁移。附件列表、下载地址和权限校验保持不变，对象由 API 代理读取，无需公开 Bucket。
 
 AccessKey 与云效凭据、AI API Key 复用 `YUNXIAO_ENCRYPTION_KEY` 加密，保存后管理接口不会返回明文。建议使用仅具有目标 Bucket 对象读写权限的凭据。阿里云 OSS 需填写 S3 兼容 Endpoint（例如 `https://s3.oss-cn-hangzhou.aliyuncs.com`）并关闭路径寻址；MinIO 通常需要开启路径寻址。
 

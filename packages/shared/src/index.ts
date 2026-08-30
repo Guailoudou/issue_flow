@@ -143,16 +143,18 @@ export const yunxiaoTestSchema = z.object({
 export const ossSettingSchema = z.object({
   enabled: z.boolean(),
   endpoint: z.string().trim().url().max(1000).transform((value) => value.replace(/\/+$/, "")),
-  region: z.string().trim().min(1).max(100).default("us-east-1"),
+  region: z.string().trim().max(100).default(""),
   bucket: z.string().trim().regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/, "Invalid S3 bucket name"),
   prefix: z.string().trim().max(500).transform((value) => value.replace(/^\/+|\/+$/g, "")),
   forcePathStyle: z.boolean().default(false),
   accessKeyId: z.string().trim().min(1).max(1000).optional(),
   accessKeySecret: z.string().trim().min(1).max(4000).optional(),
+  clearCredentials: z.boolean().default(false),
 }).superRefine((value, context) => {
   if (!["http:", "https:"].includes(new URL(value.endpoint).protocol)) context.addIssue({ code: "custom", path: ["endpoint"], message: "S3 endpoint must use HTTP or HTTPS" });
   if (value.bucket.includes("..") || /^\d{1,3}(\.\d{1,3}){3}$/.test(value.bucket)) context.addIssue({ code: "custom", path: ["bucket"], message: "Invalid S3 bucket name" });
   if (!value.prefix || value.prefix.split("/").some((part) => !part || part === "." || part === "..") || /[\\\u0000-\u001f\u007f]/.test(value.prefix)) context.addIssue({ code: "custom", path: ["prefix"], message: "Invalid S3 object prefix" });
+  if (value.clearCredentials && (value.accessKeyId || value.accessKeySecret)) context.addIssue({ code: "custom", path: ["clearCredentials"], message: "Cannot set and clear S3 credentials at the same time" });
 });
 
 export type LoginInput = z.infer<typeof loginSchema>;

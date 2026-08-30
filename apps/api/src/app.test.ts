@@ -439,10 +439,10 @@ describe.sequential("IssueFlow API", () => {
   it("stores new attachments through S3 without changing the attachment API", async () => {
     expect((await app.inject({ method: "GET", url: "/api/admin/storage/oss", headers: { cookie: userACookie } })).statusCode).toBe(403);
     const configured = await app.inject({ method: "PUT", url: "/api/admin/storage/oss", headers: { cookie: adminCookie }, payload: {
-      enabled: true, endpoint: "https://s3.oss-cn-hangzhou.aliyuncs.com/", region: "cn-hangzhou", bucket: "issueflow.test", prefix: "/issueflow/attachments/", forcePathStyle: false, accessKeyId: "test-id", accessKeySecret: "test-secret",
+      enabled: true, endpoint: "https://s3.example.com/", region: "", bucket: "issueflow.test", prefix: "/issueflow/attachments/", forcePathStyle: false, accessKeyId: "test-id", accessKeySecret: "test-secret",
     } });
     expect(configured.statusCode).toBe(200);
-    expect(json<{ setting: Record<string, unknown> }>(configured).setting).toMatchObject({ enabled: true, endpoint: "https://s3.oss-cn-hangzhou.aliyuncs.com", region: "cn-hangzhou", bucket: "issueflow.test", forcePathStyle: false, prefix: "issueflow/attachments", hasAccessKeyId: true, hasAccessKeySecret: true });
+    expect(json<{ setting: Record<string, unknown> }>(configured).setting).toMatchObject({ enabled: true, endpoint: "https://s3.example.com", region: "", bucket: "issueflow.test", forcePathStyle: false, prefix: "issueflow/attachments", hasAccessKeyId: true, hasAccessKeySecret: true });
     expect(JSON.stringify(json(configured))).not.toContain("test-secret");
     const storedSetting = await prisma.ossSetting.findUniqueOrThrow({ where: { id: 1 } });
     expect(storedSetting.accessKeySecretEncrypted).not.toContain("test-secret");
@@ -450,7 +450,7 @@ describe.sequential("IssueFlow API", () => {
     const tested = await app.inject({ method: "POST", url: "/api/admin/storage/oss/test", headers: { cookie: adminCookie } });
     expect(tested.statusCode).toBe(200);
     expect(ossBucketChecks).toBe(1);
-    expect(s3ClientOptions).toMatchObject({ region: "cn-hangzhou", forcePathStyle: false });
+    expect(s3ClientOptions).toMatchObject({ region: "us-east-1", forcePathStyle: false });
 
     const ossIssue = await prisma.issue.create({ data: { title: "OSS attachment", authorId: userAId } });
     const contents = Buffer.from("stored in oss");
@@ -467,9 +467,12 @@ describe.sequential("IssueFlow API", () => {
     expect((await app.inject({ method: "DELETE", url: `/api/attachments/${attachment.id}`, headers: { cookie: userACookie } })).statusCode).toBe(204);
     expect(ossObjects.has(attachment.storageName)).toBe(false);
 
-    await app.inject({ method: "PUT", url: "/api/admin/storage/oss", headers: { cookie: adminCookie }, payload: {
-      enabled: false, endpoint: storedSetting.endpoint, region: storedSetting.region, bucket: storedSetting.bucket, prefix: storedSetting.prefix, forcePathStyle: storedSetting.forcePathStyle,
+    const cleared = await app.inject({ method: "PUT", url: "/api/admin/storage/oss", headers: { cookie: adminCookie }, payload: {
+      enabled: false, endpoint: storedSetting.endpoint, region: "", bucket: storedSetting.bucket, prefix: storedSetting.prefix, forcePathStyle: storedSetting.forcePathStyle, clearCredentials: true,
     } });
+    expect(cleared.statusCode).toBe(200);
+    expect(json<{ setting: Record<string, unknown> }>(cleared).setting).toMatchObject({ region: "", hasAccessKeyId: false, hasAccessKeySecret: false });
+    expect(await prisma.ossSetting.findUniqueOrThrow({ where: { id: 1 } })).toMatchObject({ accessKeyIdEncrypted: null, accessKeySecretEncrypted: null });
   });
 
   it("allows an assignee to close an issue but rejects content edits", async () => {

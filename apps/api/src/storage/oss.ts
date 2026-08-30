@@ -44,13 +44,13 @@ export function encryptOssCredential(value: string, options: OssOptions) {
 }
 
 export function createOssClient(setting: OssSetting, options: OssOptions = {}) {
-  if (!setting.endpoint || !setting.region || !setting.bucket || !setting.accessKeyIdEncrypted || !setting.accessKeySecretEncrypted) {
-    throw new ApiError(400, "S3_CONFIGURATION_INCOMPLETE", "S3 endpoint, region, bucket, AccessKey ID and AccessKey Secret are required");
+  if (!setting.endpoint || !setting.bucket || !setting.accessKeyIdEncrypted || !setting.accessKeySecretEncrypted) {
+    throw new ApiError(400, "S3_CONFIGURATION_INCOMPLETE", "S3 endpoint, bucket, AccessKey ID and AccessKey Secret are required");
   }
   const key = encryptionKey(options);
   const clientOptions: S3ClientConfig & { bucket: string } = {
     endpoint: setting.endpoint,
-    region: setting.region,
+    region: setting.region || "us-east-1",
     bucket: setting.bucket,
     forcePathStyle: setting.forcePathStyle,
     credentials: {

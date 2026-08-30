@@ -12,12 +12,12 @@ export async function ossRoutes(app: FastifyInstance, prisma: PrismaClient, opti
   app.put("/admin/storage/oss", { preHandler: app.requireAdmin }, async (request) => {
     const input = ossSettingSchema.parse(request.body);
     const current = await prisma.ossSetting.findUnique({ where: { id: 1 } });
-    const accessKeyIdEncrypted = input.accessKeyId ? encryptOssCredential(input.accessKeyId, options) : current?.accessKeyIdEncrypted ?? null;
-    const accessKeySecretEncrypted = input.accessKeySecret ? encryptOssCredential(input.accessKeySecret, options) : current?.accessKeySecretEncrypted ?? null;
+    const accessKeyIdEncrypted = input.clearCredentials ? null : input.accessKeyId ? encryptOssCredential(input.accessKeyId, options) : current?.accessKeyIdEncrypted ?? null;
+    const accessKeySecretEncrypted = input.clearCredentials ? null : input.accessKeySecret ? encryptOssCredential(input.accessKeySecret, options) : current?.accessKeySecretEncrypted ?? null;
     if (input.enabled && (!accessKeyIdEncrypted || !accessKeySecretEncrypted)) {
       throw new ApiError(400, "S3_CREDENTIALS_REQUIRED", "AccessKey ID and AccessKey Secret are required before enabling S3 storage");
     }
-    const { accessKeyId: _, accessKeySecret: __, ...data } = input;
+    const { accessKeyId: _, accessKeySecret: __, clearCredentials: ___, ...data } = input;
     const setting = await prisma.ossSetting.upsert({
       where: { id: 1 },
       create: { id: 1, ...data, accessKeyIdEncrypted, accessKeySecretEncrypted },
