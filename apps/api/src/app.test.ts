@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -19,12 +19,14 @@ let attachmentId = 0;
 let uploadDir = "";
 const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
 const aiFetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+let aiFetchGate: Promise<void> | null = null;
 const mockFetch = async (input: string | URL | Request, init?: RequestInit) => {
   fetchCalls.push({ url: String(input), ...(init ? { init } : {}) });
   return new Response(JSON.stringify({ id: 88, name: "repo" }), { status: 200, headers: { "content-type": "application/json" } });
 };
 const mockAiFetch = async (input: string | URL | Request, init?: RequestInit) => {
   aiFetchCalls.push({ url: String(input), ...(init ? { init } : {}) });
+  if (aiFetchGate) await aiFetchGate;
   const request = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content: string }> };
   const prompt = JSON.parse(request.messages.find(({ role }) => role === "user")?.content ?? "{}") as { labels?: Array<{ id: number }> };
   return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ labelIds: prompt.labels?.[0] ? [prompt.labels[0].id] : [] }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
@@ -261,7 +263,7 @@ describe.sequential("IssueFlow API", () => {
     expect(json<{ items: Array<{ id: number; issueCount: number }> }>(await app.inject({ method: "GET", url: "/api/labels", headers: { cookie: userACookie } })).items.find(({ id }) => id === labelId)?.issueCount).toBe(1);
   });
 
-  it("uses an OpenAI-compatible request to label unlabeled issues without sending images", async () => {
+  it("queues an OpenAI-compatible request without blocking issue creation or sending images", async () => {
     aiFetchCalls.length = 0;
     const saved = await app.inject({ method: "PUT", url: "/api/admin/settings", headers: { cookie: adminCookie }, payload: {
       name: "IssueFlow", description: "", logoUrl: "", defaultPageSize: 20, allowUserCreateIssue: true,
@@ -272,10 +274,12 @@ describe.sequential("IssueFlow API", () => {
     expect(json<{ hasAiApiKey: boolean }>(saved).hasAiApiKey).toBe(true);
     expect((await app.inject({ method: "GET", url: "/api/settings" })).body).not.toContain("aiApiKey");
 
+    let releaseAiFetch = () => {};
+    aiFetchGate = new Promise<void>((resolve) => { releaseAiFetch = resolve; });
     const response = await app.inject({ method: "POST", url: "/api/issues", headers: { cookie: userACookie }, payload: { title: "AI label request", body: "Visible description\n![secret](https://files.example.com/private.png)\n<img src=\"https://files.example.com/other.png\">\n![reference][shot]\n[shot]: https://files.example.com/reference.png" } });
     expect(response.statusCode).toBe(201);
-    expect(json<{ labels: Array<{ label: { name: string } }> }>(response).labels.map(({ label }) => label.name)).toEqual(["bug"]);
-    expect(aiFetchCalls).toHaveLength(1);
+    expect(json<{ labels: unknown[] }>(response).labels).toEqual([]);
+    await vi.waitFor(() => expect(aiFetchCalls).toHaveLength(1));
     const aiCall = aiFetchCalls[0]!;
     const aiRequest = JSON.parse(String(aiCall.init?.body)) as { model: string; response_format: { type: string }; messages: Array<{ role: string; content: string }> };
     expect(aiRequest).toMatchObject({ model: "test-model", response_format: { type: "json_object" } });
@@ -285,6 +289,10 @@ describe.sequential("IssueFlow API", () => {
     expect(sentContent).not.toContain("private.png");
     expect(sentContent).not.toContain("other.png");
     expect(sentContent).not.toContain("reference.png");
+    releaseAiFetch();
+    aiFetchGate = null;
+    const createdIssueId = json<{ id: number }>(response).id;
+    await vi.waitFor(async () => expect(await prisma.issueLabel.count({ where: { issueId: createdIssueId } })).toBe(1));
 
     const urgent = await prisma.label.findUniqueOrThrow({ where: { name: "urgent" } });
     expect((await app.inject({ method: "POST", url: "/api/issues", headers: { cookie: userACookie }, payload: { title: "Already labeled", labelIds: [urgent.id] } })).statusCode).toBe(201);

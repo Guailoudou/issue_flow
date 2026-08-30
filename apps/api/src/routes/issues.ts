@@ -31,6 +31,9 @@ async function validateRelations(prisma: PrismaClient, productOwnerIds?: number[
 const diff = (oldIds: number[], nextIds: number[]) => ({ added: nextIds.filter((id) => !oldIds.includes(id)), removed: oldIds.filter((id) => !nextIds.includes(id)) });
 
 export async function issueRoutes(app: FastifyInstance, prisma: PrismaClient, aiOptions: AiOptions = {}) {
+  // ponytail: in-process queue; use persistent jobs when restart-safe delivery or multi-instance coordination is required.
+  let aiLabelQueue = Promise.resolve();
+
   app.get("/issues", { preHandler: app.authenticate }, async (request) => {
     const query = issueQuerySchema.parse(request.query);
     const setting = await prisma.platformSetting.findUniqueOrThrow({ where: { id: 1 } });
@@ -86,16 +89,15 @@ export async function issueRoutes(app: FastifyInstance, prisma: PrismaClient, ai
       return created;
     });
     await notifyIssue(prisma, issue.id, request.currentUser.id, "ASSIGNED", `You were assigned to #${issue.id}`, [...productOwnerIds, ...developerOwnerIds]);
-    let result = issue;
-    if (!input.labelIds?.length) {
-      try {
-        if ((await assignAiLabels(prisma, issue, setting, aiOptions)).length) result = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id }, include: issueInclude });
-      } catch (error) {
-        request.log.warn({ err: error }, "AI issue labeling failed");
-      }
+    if (setting.aiEnabled && !input.labelIds?.length) {
+      aiLabelQueue = aiLabelQueue.then(async () => {
+        await assignAiLabels(prisma, issue, setting, aiOptions);
+      }).catch((error) => {
+        app.log.warn({ err: error, issueId: issue.id }, "AI issue labeling failed");
+      });
     }
     reply.status(201);
-    return result;
+    return issue;
   });
 
   app.patch("/issues/:id", { preHandler: app.authenticate }, async (request) => {

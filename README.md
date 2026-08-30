@@ -79,7 +79,7 @@ openssl rand -hex 32
 
 ## AI 自动标签
 
-管理员可以在“管理后台 → 平台设置”配置并启用 OpenAI Chat Completions 兼容的 AI URL、模型名称、API Key 和每次最多添加的标签数。新建 Issue 没有选择标签时，系统会把标题、移除图片后的正文和现有标签列表发送给 AI，并自动添加 AI 返回的有效标签；附件和图片不会发送，AI 请求失败也不会影响 Issue 创建。
+管理员可以在“管理后台 → 平台设置”配置并启用 OpenAI Chat Completions 兼容的 AI URL、模型名称、API Key 和每次最多添加的标签数。新建 Issue 没有选择标签时，系统会将任务加入后台队列，把标题、移除图片后的正文和现有标签列表发送给 AI，并自动添加 AI 返回的有效标签；附件和图片不会发送，AI 请求不会阻塞 Issue 创建，失败也不会影响创建结果。
 
 AI API Key 与云效凭据复用 `YUNXIAO_ENCRYPTION_KEY` 加密；Docker 部署使用 `ISSUEFLOW_YUNXIAO_ENCRYPTION_KEY`。API Key 只会加密存储，管理接口不会返回明文。
 
