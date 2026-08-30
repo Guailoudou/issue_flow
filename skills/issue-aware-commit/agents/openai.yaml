@@ -1,0 +1,4 @@
+interface:
+  display_name: "Issue 关联规范提交"
+  short_description: "关联或创建 Issue，并生成中文规范提交"
+  default_prompt: "Use $issue-aware-commit to commit the current task changes with the correct IssueFlow association and Chinese commit message."
