@@ -1,4 +1,5 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { vi } from 'vitest';
 import { Timeline } from './Timeline';
 
 const actor = { id: 1, username: 'admin', displayName: '管理员', role: 'ADMIN' as const, active: true };
@@ -6,7 +7,9 @@ const createdAt = '2026-08-29T00:00:00.000Z';
 
 describe('Timeline', () => {
   it('像 GitHub 一样明确展示每项变更内容', () => {
+    const quote = vi.fn();
     render(<Timeline
+      onQuoteComment={quote}
       users={[actor, { id: 2, username: 'alice', displayName: 'Alice', role: 'USER', active: true }]}
       labels={[{ id: 3, name: 'bug', color: 'd73a4a' }, { id: 4, name: '待验收', color: 'f59e0b' }]}
       milestones={[{ id: 5, title: 'v1.0' }, { id: 6, title: 'v1.1' }]}
@@ -35,5 +38,7 @@ describe('Timeline', () => {
     expect(screen.getByText('fix/login')).toBeInTheDocument();
     expect(screen.getByText('12345678')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: '截图' }).closest('.comment-markdown')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '引用回复 管理员 的评论' }));
+    expect(quote).toHaveBeenCalledWith(expect.objectContaining({ id: 7 }), '![截图](https://example.com/image.png)');
   });
 });
