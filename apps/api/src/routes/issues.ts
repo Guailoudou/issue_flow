@@ -57,13 +57,17 @@ export async function issueRoutes(app: FastifyInstance, prisma: PrismaClient, ai
     const issue = await prisma.issue.findUnique({ where: { id }, include: { ...issueInclude,
       comments: { orderBy: { createdAt: "asc" }, include: { author: { select: userSelect } } },
       timeline: { orderBy: { createdAt: "asc" }, include: { actor: { select: userSelect } } },
+      codeReferences: { orderBy: { updatedAt: "asc" } },
       subscriptions: { where: { userId: request.currentUser.id }, select: { userId: true } },
     } });
     if (!issue) throw new ApiError(404, "ISSUE_NOT_FOUND", "Issue not found");
     return {
-      ...issue, subscribed: issue.subscriptions.length > 0, subscriptions: undefined,
+      ...issue, subscribed: issue.subscriptions.length > 0, subscriptions: undefined, codeReferences: undefined,
       comments: issue.comments.map((comment) => comment.deletedAt ? { ...comment, body: "", deleted: true } : { ...comment, deleted: false }),
-      timeline: issue.timeline.map((event) => ({ ...event, data: JSON.parse(event.data) })),
+      timeline: [
+        ...issue.timeline.map((event) => ({ ...event, data: JSON.parse(event.data) })),
+        ...issue.codeReferences.map((reference) => ({ id: -reference.id, issueId: id, actorId: issue.authorId, actor: { ...issue.author, displayName: reference.authorName || "云效" }, type: reference.type === "COMMIT" ? "YUNXIAO_COMMIT_REFERENCED" : "YUNXIAO_MR_REFERENCED", data: reference, createdAt: reference.updatedAt })),
+      ].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()),
     };
   });
 

@@ -18,6 +18,7 @@ describe('Timeline', () => {
         { id: 5, type: 'ATTACHMENT_ADDED', actor, createdAt, data: { fileName: 'design.png' } },
         { id: 6, type: 'ISSUE_CLOSED_BY_YUNXIAO_MR', actor, createdAt, data: { title: '修复登录流程' } },
         { id: 7, type: 'COMMENT_CREATED', actor, createdAt, comment: { id: 7, body: '![截图](https://example.com/image.png)', author: actor, createdAt } },
+        { id: -8, type: 'YUNXIAO_COMMIT_REFERENCED', actor: { ...actor, displayName: 'Alice' }, createdAt, data: { title: 'fix: 修复登录', url: 'https://codeup.example.com/commit/123', status: 'PUSHED', sourceBranch: 'fix/login', commitSha: '1234567890abcdef' } },
       ]}
     />);
 
@@ -27,6 +28,9 @@ describe('Timeline', () => {
     expect(screen.getByText('将里程碑从“v1.0”改为“v1.1”')).toBeInTheDocument();
     expect(screen.getByText('添加了附件“design.png”')).toBeInTheDocument();
     expect(screen.getByText('通过云效合并请求关闭了 Issue：“修复登录流程”')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /fix: 修复登录/ })).toHaveAttribute('href', 'https://codeup.example.com/commit/123');
+    expect(screen.getByText('fix/login')).toBeInTheDocument();
+    expect(screen.getByText('12345678')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: '截图' }).closest('.comment-markdown')).toBeInTheDocument();
   });
 });

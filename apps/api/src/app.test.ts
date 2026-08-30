@@ -558,6 +558,8 @@ describe.sequential("IssueFlow API", () => {
     const references = await app.inject({ method: "GET", url: `/api/issues/${issue.id}/code-references`, headers: { cookie: userACookie } });
     expect(references.statusCode).toBe(200);
     expect(json<{ references: Array<{ commitSha: string }> }>(references).references[0]?.commitSha).toBe("abc123");
+    const detail = json<{ timeline: Array<{ type: string; actor: { displayName: string }; data: { commitSha: string; url: string } }> }>(await app.inject({ method: "GET", url: `/api/issues/${issue.id}`, headers: { cookie: userACookie } }));
+    expect(detail.timeline).toContainEqual(expect.objectContaining({ type: "YUNXIAO_COMMIT_REFERENCED", actor: expect.objectContaining({ displayName: "Alice" }), data: expect.objectContaining({ commitSha: "abc123", url: "https://codeup.aliyun.com/group/repo/commit/abc123" }) }));
   });
 
   it("applies configurable state and label actions from Yunxiao push commits", async () => {
