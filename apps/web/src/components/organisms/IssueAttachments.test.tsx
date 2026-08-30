@@ -22,8 +22,8 @@ describe('IssueAttachments', () => {
     expect(screen.getByRole('dialog', { name: '页面.png' })).toBeInTheDocument();
   });
 
-  it('没有附件时展示空态', async () => {
+  it('没有附件时不展示重复空态', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ attachments: [] }), { headers: { 'Content-Type': 'application/json' } })));
-    renderAttachments(); expect(await screen.findByText('暂无附件')).toBeInTheDocument();
+    renderAttachments(); expect(await screen.findByText('拖拽文件到此处，或点击选择文件')).toBeInTheDocument(); expect(screen.queryByText('暂无附件')).not.toBeInTheDocument();
   });
 });

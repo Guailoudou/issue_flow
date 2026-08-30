@@ -1,7 +1,6 @@
-import { ClipboardPaste, File, FilePlus2, Trash2 } from 'lucide-react';
+import { File, Trash2, Upload } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Alert } from '../atoms/Alert';
-import { Button } from '../atoms/Button';
 
 export const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
 export const MAX_ATTACHMENT_COUNT = 20;
@@ -28,54 +27,46 @@ export function AttachmentPicker({ value, onChange, disabled, existingCount = 0 
   const [draggingFiles, setDraggingFiles] = useState(false);
   const items = useMemo(() => value.map((file) => ({ file, previewUrl: isPreviewableAttachment(file.type) ? URL.createObjectURL(file) : null })), [value]);
   useEffect(() => () => items.forEach(({ previewUrl }) => { if (previewUrl) URL.revokeObjectURL(previewUrl); }), [items]);
-  const append = (selected: File[], source: 'picker' | 'clipboard' | 'drop') => {
+  const full = disabled || existingCount + value.length >= MAX_ATTACHMENT_COUNT;
+  const append = (selected: File[], source: 'picker' | 'drop') => {
     const result = validateAttachments(selected, existingCount + value.length);
     setErrors(result.errors);
     if (result.accepted.length) onChange([...value, ...result.accepted]);
-    setFeedback(result.accepted.length && source !== 'picker' ? `已通过${source === 'clipboard' ? '粘贴' : '拖拽'}添加 ${result.accepted.length} 个附件` : '');
+    setFeedback(result.accepted.length && source === 'drop' ? `已通过拖拽添加 ${result.accepted.length} 个附件` : '');
     if (inputRef.current) inputRef.current.value = '';
   };
-  const paste = (event: React.ClipboardEvent<HTMLDivElement>) => {
-    if (disabled) return;
-    const files = Array.from(event.clipboardData.files);
-    if (!files.length) return;
-    event.preventDefault();
-    append(files, 'clipboard');
-  };
   const containsFiles = (dataTransfer: DataTransfer) => Array.from(dataTransfer.types ?? []).includes('Files') || dataTransfer.files.length > 0;
-  const dragEnter = (event: React.DragEvent<HTMLDivElement>) => {
+  const dragEnter = (event: React.DragEvent<HTMLLabelElement>) => {
     if (!containsFiles(event.dataTransfer)) return;
     event.preventDefault();
     dragDepth.current += 1;
-    if (!disabled) setDraggingFiles(true);
+    if (!full) setDraggingFiles(true);
   };
-  const dragOver = (event: React.DragEvent<HTMLDivElement>) => {
+  const dragOver = (event: React.DragEvent<HTMLLabelElement>) => {
     if (!containsFiles(event.dataTransfer)) return;
     event.preventDefault();
-    event.dataTransfer.dropEffect = disabled ? 'none' : 'copy';
+    event.dataTransfer.dropEffect = full ? 'none' : 'copy';
   };
-  const dragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+  const dragLeave = (event: React.DragEvent<HTMLLabelElement>) => {
     if (!containsFiles(event.dataTransfer)) return;
     event.preventDefault();
     dragDepth.current = Math.max(0, dragDepth.current - 1);
     if (dragDepth.current === 0) setDraggingFiles(false);
   };
-  const drop = (event: React.DragEvent<HTMLDivElement>) => {
+  const drop = (event: React.DragEvent<HTMLLabelElement>) => {
     if (!containsFiles(event.dataTransfer)) return;
     event.preventDefault();
     dragDepth.current = 0;
     setDraggingFiles(false);
-    if (!disabled) append(Array.from(event.dataTransfer.files), 'drop');
+    if (!full) append(Array.from(event.dataTransfer.files), 'drop');
   };
   return <div className="space-y-3">
-    <input ref={inputRef} id={inputId} className="sr-only" type="file" multiple disabled={disabled} onChange={(event) => append(Array.from(event.target.files ?? []), 'picker')} />
-    <div role="group" aria-label="附件粘贴与拖拽区域" tabIndex={disabled ? undefined : 0} onPaste={paste} onDragEnter={dragEnter} onDragOver={dragOver} onDragLeave={dragLeave} onDrop={drop} className={`rounded-lg border border-dashed p-3 outline-none transition-colors focus-visible:border-brand-600 focus-visible:ring-2 focus-visible:ring-brand-600/25 ${draggingFiles ? 'border-brand-600 bg-brand-50' : 'border-slate-300 bg-slate-50'}`}>
-      <div className="flex flex-wrap items-center gap-3">
-        <Button type="button" variant="secondary" disabled={disabled || existingCount + value.length >= MAX_ATTACHMENT_COUNT} icon={<FilePlus2 className="size-4" aria-hidden="true" />} onClick={() => inputRef.current?.click()}>选择文件</Button>
-        <span className="flex items-center gap-1.5 text-sm text-slate-600"><ClipboardPaste className="size-4 shrink-0" aria-hidden="true" />拖拽文件到此处，或聚焦后按 Ctrl+V / ⌘V 粘贴</span>
-      </div>
-      <p className="mt-2 text-xs text-slate-500">不限文件类型；单个不超过 10 MiB，最多 20 个</p>
-    </div>
+    <input ref={inputRef} id={inputId} className="peer sr-only" type="file" multiple disabled={full} onChange={(event) => append(Array.from(event.target.files ?? []), 'picker')} />
+    <label htmlFor={inputId} onDragEnter={dragEnter} onDragOver={dragOver} onDragLeave={dragLeave} onDrop={drop} className={`flex min-h-28 flex-col items-center justify-center rounded-lg border border-dashed p-4 text-center outline-none transition-colors peer-focus-visible:border-brand-600 peer-focus-visible:ring-2 peer-focus-visible:ring-brand-600/25 ${full ? 'cursor-not-allowed border-slate-300 bg-slate-50 opacity-50' : draggingFiles ? 'cursor-pointer border-brand-600 bg-brand-50' : 'cursor-pointer border-slate-300 bg-slate-50 hover:border-brand-500 hover:bg-brand-50/50'}`}>
+      <Upload className="mb-2 size-6 text-slate-500" aria-hidden="true" />
+      <span className="text-sm font-medium text-slate-700">拖拽文件到此处，或点击选择文件</span>
+      <span className="mt-1 text-xs text-slate-500">不限文件类型；单个不超过 10 MiB，最多 20 个</span>
+    </label>
     {feedback && <p role="status" className="text-sm font-medium text-emerald-700">{feedback}</p>}
     {errors.length > 0 && <Alert message={errors.join('；')} />}
     {items.length > 0 && <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4" aria-label="待上传附件">

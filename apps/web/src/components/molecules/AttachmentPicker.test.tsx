@@ -28,35 +28,17 @@ describe('AttachmentPicker', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('超过 10 MiB');
   });
 
-  it('从剪贴板添加文件和图片并显示反馈', () => {
-    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:pasted-preview') });
-    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
-    render(<Harness />);
-    const image = new File(['image'], 'clipboard.png', { type: 'image/png' });
-    const document = new File(['document'], 'clipboard.pdf', { type: 'application/pdf' });
-
-    fireEvent.paste(screen.getByRole('group', { name: '附件粘贴与拖拽区域' }), { clipboardData: { files: [image, document] } });
-
-    expect(screen.getByRole('status')).toHaveTextContent('已通过粘贴添加 2 个附件');
-    expect(screen.getByRole('img', { name: 'clipboard.png' })).toHaveAttribute('src', 'blob:pasted-preview');
-    expect(screen.getByTitle('clipboard.pdf')).toBeInTheDocument();
-  });
-
-  it('不拦截没有文件的文字粘贴', () => {
-    render(<Harness />);
-    const zone = screen.getByRole('group', { name: '附件粘贴与拖拽区域' });
-    const event = new Event('paste', { bubbles: true, cancelable: true });
-    Object.defineProperty(event, 'clipboardData', { value: { files: [] } });
-
-    zone.dispatchEvent(event);
-
-    expect(event.defaultPrevented).toBe(false);
-    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  it('点击上传框触发文件选择', () => {
+    const { container } = render(<Harness />);
+    const input = container.querySelector('input[type="file"]')!;
+    const click = vi.fn(); input.addEventListener('click', click);
+    fireEvent.click(screen.getByText('拖拽文件到此处，或点击选择文件'));
+    expect(click).toHaveBeenCalledOnce();
   });
 
   it('拖入文件时高亮并在放下后加入列表', () => {
     render(<Harness />);
-    const zone = screen.getByRole('group', { name: '附件粘贴与拖拽区域' });
+    const zone = screen.getByText('拖拽文件到此处，或点击选择文件').closest('label')!;
     const archive = new File(['archive'], 'dropped.zip', { type: 'application/zip' });
     fireEvent.dragEnter(zone, { dataTransfer: { types: ['Files'], files: [] } });
     expect(zone).toHaveClass('border-brand-600', 'bg-brand-50');
@@ -70,7 +52,7 @@ describe('AttachmentPicker', () => {
 
   it('不拦截没有文件的拖拽内容', () => {
     render(<Harness />);
-    const zone = screen.getByRole('group', { name: '附件粘贴与拖拽区域' });
+    const zone = screen.getByText('拖拽文件到此处，或点击选择文件').closest('label')!;
     const event = new Event('drop', { bubbles: true, cancelable: true });
     Object.defineProperty(event, 'dataTransfer', { value: { types: ['text/plain'], files: [] } });
 
@@ -79,7 +61,7 @@ describe('AttachmentPicker', () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
-  it('粘贴与选择文件共用数量限制', () => {
+  it('选择文件时遵守数量限制', () => {
     const files = [new File(['a'], 'a.txt'), new File(['b'], 'b.txt')];
     const result = validateAttachments(files, MAX_ATTACHMENT_COUNT - 1);
     expect(result.accepted).toHaveLength(1);
