@@ -2,6 +2,7 @@ import { CircleCheck, CircleDot, ExternalLink, GitCommitHorizontal, GitMerge, Me
 import type { Label, Milestone, TimelineEvent, User } from '../../lib/types';
 import { formatDate } from '../../lib/format';
 import { Avatar } from '../atoms/Avatar';
+import { Badge } from '../atoms/Badge';
 import { MarkdownRenderer } from '../molecules/MarkdownRenderer';
 
 const icons = { COMMENT_CREATED: MessageSquare, COMMENT_EDITED: Pencil, COMMENT_DELETED: MessageSquare, ISSUE_CLOSED: CircleCheck, ISSUE_CLOSED_BY_YUNXIAO_COMMIT: CircleCheck, ISSUE_CLOSED_BY_YUNXIAO_MR: GitMerge, ISSUE_REOPENED: CircleDot, ISSUE_REOPENED_BY_YUNXIAO_COMMIT: CircleDot, ISSUE_EDITED: Pencil, ASSIGNEES_CHANGED: UserRoundPlus, LABELS_CHANGED: Tag, MILESTONE_CHANGED: Tag, ATTACHMENT_ADDED: Paperclip, ATTACHMENT_REMOVED: Paperclip, YUNXIAO_COMMIT_REFERENCED: GitCommitHorizontal, YUNXIAO_MR_REFERENCED: GitMerge };
@@ -12,7 +13,7 @@ const text = (value: unknown) => typeof value === 'string' ? value : '';
 // ponytail: removed metadata falls back to stable IDs; persist snapshots if deleted names must remain readable.
 const named = (value: unknown, names: Map<number, string>, fallback: string) => numberIds(value).map((id) => names.get(id) ?? `${fallback} #${id}`).join('、');
 
-function eventDescription(event: TimelineEvent, users: Map<number, string>, labels: Map<number, string>, milestones: Map<number, string>) {
+function eventDescription(event: TimelineEvent, users: Map<number, string>, milestones: Map<number, string>) {
   const data = asRecord(event.data ?? event.metadata);
   if (event.type === 'ISSUE_EDITED') {
     const title = asRecord(data.title);
@@ -27,10 +28,6 @@ function eventDescription(event: TimelineEvent, users: Map<number, string>, labe
       if (numberIds(change.removed).length) changes.push(`移除${role} ${named(change.removed, users, '用户')}`);
     }
     return changes.join('；') || fallbackDescriptions[event.type];
-  }
-  if (event.type === 'LABELS_CHANGED') {
-    const changes = [numberIds(data.added).length ? `添加标签 ${named(data.added, labels, '标签')}` : '', numberIds(data.removed).length ? `移除标签 ${named(data.removed, labels, '标签')}` : ''].filter(Boolean).join('；');
-    return `${data.source === 'YUNXIAO' ? '通过云效提交' : ''}${changes || fallbackDescriptions[event.type]}`;
   }
   if (event.type === 'MILESTONE_CHANGED') {
     const from = typeof data.from === 'number' ? milestones.get(data.from) ?? `里程碑 #${data.from}` : '';
@@ -48,6 +45,12 @@ function eventDescription(event: TimelineEvent, users: Map<number, string>, labe
   return fallbackDescriptions[event.type] ?? '更新了 Issue';
 }
 
+function LabelChangeEvent({ event, labels }: { event: TimelineEvent; labels: Map<number, Label> }) {
+  const data = asRecord(event.data ?? event.metadata);
+  const changes = [['添加标签', numberIds(data.added)], ['移除标签', numberIds(data.removed)]] as const;
+  return <p className="flex flex-wrap items-center gap-1.5 text-sm text-slate-600"><Tag className="size-4 shrink-0 text-brand-700" aria-hidden="true" /><strong className="text-slate-900">{event.actor.displayName}</strong>{data.source === 'YUNXIAO' && <span>通过云效提交</span>}{changes.map(([verb, ids]) => ids.length > 0 && <span key={verb} className="inline-flex flex-wrap items-center gap-1.5"><span>{verb}</span>{ids.map((id) => { const label = labels.get(id); return label ? <Badge key={id} color={label.color}>{label.name}</Badge> : <span key={id}>标签 #{id}</span>; })}</span>)}<span aria-hidden="true">·</span><time className="text-xs text-slate-500" dateTime={event.createdAt}>{formatDate(event.createdAt)}</time></p>;
+}
+
 function CodeReferenceEvent({ event }: { event: TimelineEvent }) {
   const data = asRecord(event.data);
   const isCommit = event.type === 'YUNXIAO_COMMIT_REFERENCED';
@@ -63,7 +66,7 @@ function CodeReferenceEvent({ event }: { event: TimelineEvent }) {
 
 export function Timeline({ events, users = [], labels = [], milestones = [] }: { events: TimelineEvent[]; users?: User[]; labels?: Label[]; milestones?: Milestone[] }) {
   const userNames = new Map(users.map((user) => [user.id, user.displayName]));
-  const labelNames = new Map(labels.map((label) => [label.id, label.name]));
+  const labelById = new Map(labels.map((label) => [label.id, label]));
   const milestoneNames = new Map(milestones.map((milestone) => [milestone.id, milestone.title]));
-  return <ol className="space-y-4" aria-label="Issue 时间线">{events.map((event) => { const Icon = icons[event.type as keyof typeof icons] ?? CircleDot; const comment = event.comment; const codeReference = event.type === 'YUNXIAO_COMMIT_REFERENCED' || event.type === 'YUNXIAO_MR_REFERENCED'; return <li key={`${event.type}-${event.id}`} className="relative flex gap-3"><div className="absolute bottom-[-1rem] left-[17px] top-9 w-px bg-slate-200 last:hidden" /><Avatar name={event.actor.displayName} src={event.actor.avatarUrl} />{codeReference ? <CodeReferenceEvent event={event} /> : <div className={`min-w-0 flex-1 ${comment ? 'surface overflow-hidden' : 'py-1.5'}`}>{comment ? <><div className="border-b bg-slate-50 px-4 py-2 text-sm"><strong>{event.actor.displayName}</strong> 评论于 <time dateTime={event.createdAt}>{formatDate(event.createdAt)}</time>{comment.updatedAt && comment.updatedAt !== comment.createdAt && <span className="ml-2 text-xs text-slate-500">已编辑</span>}</div><div className="comment-markdown p-4"><MarkdownRenderer value={comment.body} emptyText="评论已删除" /></div></> : <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-slate-600"><Icon className="size-4 shrink-0 text-brand-700" aria-hidden="true" /><strong className="text-slate-900">{event.actor.displayName}</strong><span className="break-words text-slate-700">{eventDescription(event, userNames, labelNames, milestoneNames)}</span><span aria-hidden="true">·</span><time className="text-xs text-slate-500" dateTime={event.createdAt}>{formatDate(event.createdAt)}</time></p>}</div>}</li>; })}</ol>;
+  return <ol className="space-y-4" aria-label="Issue 时间线">{events.map((event) => { const Icon = icons[event.type as keyof typeof icons] ?? CircleDot; const comment = event.comment; const codeReference = event.type === 'YUNXIAO_COMMIT_REFERENCED' || event.type === 'YUNXIAO_MR_REFERENCED'; return <li key={`${event.type}-${event.id}`} className="relative flex gap-3"><div className="absolute bottom-[-1rem] left-[17px] top-9 w-px bg-slate-200 last:hidden" /><Avatar name={event.actor.displayName} src={event.actor.avatarUrl} />{codeReference ? <CodeReferenceEvent event={event} /> : <div className={`min-w-0 flex-1 ${comment ? 'surface overflow-hidden' : 'py-1.5'}`}>{comment ? <><div className="border-b bg-slate-50 px-4 py-2 text-sm"><strong>{event.actor.displayName}</strong> 评论于 <time dateTime={event.createdAt}>{formatDate(event.createdAt)}</time>{comment.updatedAt && comment.updatedAt !== comment.createdAt && <span className="ml-2 text-xs text-slate-500">已编辑</span>}</div><div className="comment-markdown p-4"><MarkdownRenderer value={comment.body} emptyText="评论已删除" /></div></> : event.type === 'LABELS_CHANGED' ? <LabelChangeEvent event={event} labels={labelById} /> : <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-slate-600"><Icon className="size-4 shrink-0 text-brand-700" aria-hidden="true" /><strong className="text-slate-900">{event.actor.displayName}</strong><span className="break-words text-slate-700">{eventDescription(event, userNames, milestoneNames)}</span><span aria-hidden="true">·</span><time className="text-xs text-slate-500" dateTime={event.createdAt}>{formatDate(event.createdAt)}</time></p>}</div>}</li>; })}</ol>;
 }

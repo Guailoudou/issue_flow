@@ -24,7 +24,10 @@ describe('Timeline', () => {
 
     expect(screen.getByText('将标题从“旧标题”改为“新标题”，并修改了描述')).toBeInTheDocument();
     expect(screen.getByText('添加产品负责人 Alice；移除开发负责人 管理员')).toBeInTheDocument();
-    expect(screen.getByText('添加标签 bug；移除标签 待验收')).toBeInTheDocument();
+    expect(screen.getByText('添加标签')).toBeInTheDocument();
+    expect(screen.getByText('移除标签')).toBeInTheDocument();
+    expect(screen.getByText('bug')).toHaveStyle({ borderColor: '#d73a4a' });
+    expect(screen.getByText('待验收')).toHaveStyle({ borderColor: '#f59e0b' });
     expect(screen.getByText('将里程碑从“v1.0”改为“v1.1”')).toBeInTheDocument();
     expect(screen.getByText('添加了附件“design.png”')).toBeInTheDocument();
     expect(screen.getByText('通过云效合并请求关闭了 Issue：“修复登录流程”')).toBeInTheDocument();
