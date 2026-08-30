@@ -141,20 +141,38 @@ export const yunxiaoTestSchema = z.object({
 });
 
 export const ossSettingSchema = z.object({
-  enabled: z.boolean(),
-  endpoint: z.string().trim().url().max(1000).transform((value) => value.replace(/\/+$/, "")),
+  storageMode: z.enum(["LOCAL", "S3", "WEBDAV"]),
+  endpoint: z.string().trim().max(1000).default("").transform((value) => value.replace(/\/+$/, "")),
   region: z.string().trim().max(100).default(""),
-  bucket: z.string().trim().regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/, "Invalid S3 bucket name"),
-  prefix: z.string().trim().max(500).transform((value) => value.replace(/^\/+|\/+$/g, "")),
+  bucket: z.string().trim().max(63).default(""),
+  prefix: z.string().trim().max(500).default("issueflow/attachments").transform((value) => value.replace(/^\/+|\/+$/g, "")),
   forcePathStyle: z.boolean().default(false),
   accessKeyId: z.string().trim().min(1).max(1000).optional(),
   accessKeySecret: z.string().trim().min(1).max(4000).optional(),
   clearCredentials: z.boolean().default(false),
+  webdavUrl: z.string().trim().max(1000).default("").transform((value) => value.replace(/\/+$/, "")),
+  webdavPath: z.string().trim().max(500).default("issueflow/attachments").transform((value) => value.replace(/^\/+|\/+$/g, "")),
+  webdavUsername: z.string().trim().min(1).max(1000).optional(),
+  webdavPassword: z.string().min(1).max(4000).optional(),
+  clearWebdavCredentials: z.boolean().default(false),
 }).superRefine((value, context) => {
-  if (!["http:", "https:"].includes(new URL(value.endpoint).protocol)) context.addIssue({ code: "custom", path: ["endpoint"], message: "S3 endpoint must use HTTP or HTTPS" });
-  if (value.bucket.includes("..") || /^\d{1,3}(\.\d{1,3}){3}$/.test(value.bucket)) context.addIssue({ code: "custom", path: ["bucket"], message: "Invalid S3 bucket name" });
-  if (!value.prefix || value.prefix.split("/").some((part) => !part || part === "." || part === "..") || /[\\\u0000-\u001f\u007f]/.test(value.prefix)) context.addIssue({ code: "custom", path: ["prefix"], message: "Invalid S3 object prefix" });
+  const validHttpUrl = (input: string) => { try { return ["http:", "https:"].includes(new URL(input).protocol); } catch { return false; } };
+  const validPath = (input: string) => Boolean(input) && input.split("/").every((part) => Boolean(part) && part !== "." && part !== "..") && !/[\\\u0000-\u001f\u007f]/.test(input);
+  if (value.endpoint && !validHttpUrl(value.endpoint)) context.addIssue({ code: "custom", path: ["endpoint"], message: "S3 endpoint must use HTTP or HTTPS" });
+  if (value.bucket && (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(value.bucket) || value.bucket.includes("..") || /^\d{1,3}(\.\d{1,3}){3}$/.test(value.bucket))) context.addIssue({ code: "custom", path: ["bucket"], message: "Invalid S3 bucket name" });
+  if (value.prefix && !validPath(value.prefix)) context.addIssue({ code: "custom", path: ["prefix"], message: "Invalid S3 object prefix" });
+  if (value.webdavUrl && !validHttpUrl(value.webdavUrl)) context.addIssue({ code: "custom", path: ["webdavUrl"], message: "WebDAV URL must use HTTP or HTTPS" });
+  if (value.webdavUrl) {
+    try {
+      const url = new URL(value.webdavUrl);
+      if (url.username || url.password || url.search || url.hash) context.addIssue({ code: "custom", path: ["webdavUrl"], message: "WebDAV URL must not contain credentials, a query, or a fragment" });
+    } catch { /* The protocol validation above reports the invalid URL. */ }
+  }
+  if (value.webdavPath && !validPath(value.webdavPath)) context.addIssue({ code: "custom", path: ["webdavPath"], message: "Invalid WebDAV path" });
+  if (value.storageMode === "S3" && (!value.endpoint || !value.bucket || !value.prefix)) context.addIssue({ code: "custom", path: ["storageMode"], message: "S3 endpoint, bucket and object prefix are required" });
+  if (value.storageMode === "WEBDAV" && (!value.webdavUrl || !value.webdavPath)) context.addIssue({ code: "custom", path: ["storageMode"], message: "WebDAV URL and path are required" });
   if (value.clearCredentials && (value.accessKeyId || value.accessKeySecret)) context.addIssue({ code: "custom", path: ["clearCredentials"], message: "Cannot set and clear S3 credentials at the same time" });
+  if (value.clearWebdavCredentials && (value.webdavUsername || value.webdavPassword)) context.addIssue({ code: "custom", path: ["clearWebdavCredentials"], message: "Cannot set and clear WebDAV credentials at the same time" });
 });
 
 export type LoginInput = z.infer<typeof loginSchema>;

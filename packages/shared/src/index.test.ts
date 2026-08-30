@@ -56,8 +56,10 @@ describe("shared API schemas", () => {
   });
 
   it("normalizes safe S3 endpoints, buckets and object prefixes", () => {
-    expect(ossSettingSchema.parse({ enabled: false, endpoint: "https://s3.oss-cn-hangzhou.aliyuncs.com/", region: "", bucket: "issueflow.test", prefix: "/issueflow/attachments/" })).toMatchObject({ endpoint: "https://s3.oss-cn-hangzhou.aliyuncs.com", region: "", bucket: "issueflow.test", prefix: "issueflow/attachments", forcePathStyle: false, clearCredentials: false });
-    expect(ossSettingSchema.safeParse({ enabled: false, endpoint: "ftp://example.com", bucket: "issueflow-test", prefix: "../files" }).success).toBe(false);
-    expect(ossSettingSchema.safeParse({ enabled: false, endpoint: "https://s3.example.com", bucket: "issueflow-test", prefix: "files", accessKeyId: "new", clearCredentials: true }).success).toBe(false);
+    expect(ossSettingSchema.parse({ storageMode: "S3", endpoint: "https://s3.oss-cn-hangzhou.aliyuncs.com/", region: "", bucket: "issueflow.test", prefix: "/issueflow/attachments/" })).toMatchObject({ endpoint: "https://s3.oss-cn-hangzhou.aliyuncs.com", region: "", bucket: "issueflow.test", prefix: "issueflow/attachments", forcePathStyle: false, clearCredentials: false });
+    expect(ossSettingSchema.safeParse({ storageMode: "S3", endpoint: "ftp://example.com", bucket: "issueflow-test", prefix: "../files" }).success).toBe(false);
+    expect(ossSettingSchema.safeParse({ storageMode: "S3", endpoint: "https://s3.example.com", bucket: "issueflow-test", prefix: "files", accessKeyId: "new", clearCredentials: true }).success).toBe(false);
+    expect(ossSettingSchema.parse({ storageMode: "WEBDAV", webdavUrl: "https://dav.example.com/", webdavPath: "/issueflow/files/" })).toMatchObject({ webdavUrl: "https://dav.example.com", webdavPath: "issueflow/files" });
+    expect(ossSettingSchema.safeParse({ storageMode: "WEBDAV", webdavUrl: "ftp://dav.example.com", webdavPath: "../files" }).success).toBe(false);
   });
 });

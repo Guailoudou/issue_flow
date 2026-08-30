@@ -96,7 +96,7 @@ async function createWorkbook(prisma: PrismaClient, uploadDir: string, query: Re
     const firstImage = issue.attachments.find((attachment) => isPreviewableImageMime(attachment.mimeType));
     if (firstImage) {
       try {
-        const buffer = await readAttachmentBuffer(prisma, uploadDir, firstImage, options.oss);
+        const buffer = await readAttachmentBuffer(prisma, uploadDir, firstImage, options);
         const extension = firstImage.mimeType === "image/jpeg" ? "jpeg" : firstImage.mimeType.split("/")[1];
         if (["png", "jpeg", "gif", "webp"].includes(extension ?? "")) {
           // ExcelJS can serialize arbitrary OOXML image extensions at runtime; its public type union omits WebP.

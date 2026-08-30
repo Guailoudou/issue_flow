@@ -22,6 +22,7 @@ let uploadDir = "";
 const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
 const aiFetchCalls: Array<{ url: string; init?: RequestInit }> = [];
 const ossObjects = new Map<string, Buffer>();
+const webdavObjects = new Map<string, Buffer>();
 let ossBucketChecks = 0;
 let s3ClientOptions: { region?: unknown; forcePathStyle?: boolean } | undefined;
 const mockOssClient = {
@@ -42,6 +43,21 @@ const mockAiFetch = async (input: string | URL | Request, init?: RequestInit) =>
   const request = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content: string }> };
   const prompt = JSON.parse(request.messages.find(({ role }) => role === "user")?.content ?? "{}") as { labels?: Array<{ id: number }> };
   return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ labelIds: prompt.labels?.[0] ? [prompt.labels[0].id] : [] }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
+};
+const mockWebDavFetch: typeof fetch = async (input, init) => {
+  const url = String(input);
+  const method = init?.method ?? "GET";
+  if (method === "MKCOL") return new Response(null, { status: 201 });
+  if (method === "PUT") {
+    webdavObjects.set(url, Buffer.from(init?.body as Uint8Array));
+    return new Response(null, { status: 201 });
+  }
+  if (method === "DELETE") {
+    const existed = webdavObjects.delete(url);
+    return new Response(null, { status: existed ? 204 : 404 });
+  }
+  const contents = webdavObjects.get(url);
+  return contents ? new Response(new Uint8Array(contents), { status: 200 }) : new Response(null, { status: 404 });
 };
 
 const cookieFrom = (headers: Record<string, unknown>) => String(headers["set-cookie"]).split(";")[0] ?? "";
@@ -85,7 +101,7 @@ beforeAll(async () => {
   await prisma.session.deleteMany();
   await prisma.user.deleteMany();
   await prisma.platformSetting.deleteMany();
-  app = await buildApp({ prisma, attachments: { uploadDir, oss: { encryptionKey: "11".repeat(32), clientFactory: (options) => { s3ClientOptions = options; return mockOssClient; } } }, yunxiao: { encryptionKey: "11".repeat(32), webhookBaseUrl: "https://issues.example.com", fetchImpl: mockFetch, timeoutMs: 100 }, ai: { encryptionKey: "22".repeat(32), fetchImpl: mockAiFetch, timeoutMs: 100 } });
+  app = await buildApp({ prisma, attachments: { uploadDir, oss: { encryptionKey: "11".repeat(32), clientFactory: (options) => { s3ClientOptions = options; return mockOssClient; } }, webdav: { encryptionKey: "11".repeat(32), fetchImpl: mockWebDavFetch } }, yunxiao: { encryptionKey: "11".repeat(32), webhookBaseUrl: "https://issues.example.com", fetchImpl: mockFetch, timeoutMs: 100 }, ai: { encryptionKey: "22".repeat(32), fetchImpl: mockAiFetch, timeoutMs: 100 } });
 });
 afterAll(async () => { if (app) await app.close(); await prisma.$disconnect(); if (uploadDir) await rm(uploadDir, { recursive: true, force: true }); });
 
@@ -439,7 +455,7 @@ describe.sequential("IssueFlow API", () => {
   it("stores new attachments through S3 without changing the attachment API", async () => {
     expect((await app.inject({ method: "GET", url: "/api/admin/storage/oss", headers: { cookie: userACookie } })).statusCode).toBe(403);
     const configured = await app.inject({ method: "PUT", url: "/api/admin/storage/oss", headers: { cookie: adminCookie }, payload: {
-      enabled: true, endpoint: "https://s3.example.com/", region: "", bucket: "issueflow.test", prefix: "/issueflow/attachments/", forcePathStyle: false, accessKeyId: "test-id", accessKeySecret: "test-secret",
+      storageMode: "S3", endpoint: "https://s3.example.com/", region: "", bucket: "issueflow.test", prefix: "/issueflow/attachments/", forcePathStyle: false, accessKeyId: "test-id", accessKeySecret: "test-secret",
     } });
     expect(configured.statusCode).toBe(200);
     expect(json<{ setting: Record<string, unknown> }>(configured).setting).toMatchObject({ enabled: true, endpoint: "https://s3.example.com", region: "", bucket: "issueflow.test", forcePathStyle: false, prefix: "issueflow/attachments", hasAccessKeyId: true, hasAccessKeySecret: true });
@@ -468,11 +484,39 @@ describe.sequential("IssueFlow API", () => {
     expect(ossObjects.has(attachment.storageName)).toBe(false);
 
     const cleared = await app.inject({ method: "PUT", url: "/api/admin/storage/oss", headers: { cookie: adminCookie }, payload: {
-      enabled: false, endpoint: storedSetting.endpoint, region: "", bucket: storedSetting.bucket, prefix: storedSetting.prefix, forcePathStyle: storedSetting.forcePathStyle, clearCredentials: true,
+      storageMode: "LOCAL", endpoint: storedSetting.endpoint, region: "", bucket: storedSetting.bucket, prefix: storedSetting.prefix, forcePathStyle: storedSetting.forcePathStyle, clearCredentials: true,
     } });
     expect(cleared.statusCode).toBe(200);
     expect(json<{ setting: Record<string, unknown> }>(cleared).setting).toMatchObject({ region: "", hasAccessKeyId: false, hasAccessKeySecret: false });
     expect(await prisma.ossSetting.findUniqueOrThrow({ where: { id: 1 } })).toMatchObject({ accessKeyIdEncrypted: null, accessKeySecretEncrypted: null });
+  });
+
+  it("stores new attachments through WebDAV and keeps storage modes mutually exclusive", async () => {
+    const configured = await app.inject({ method: "PUT", url: "/api/admin/storage/oss", headers: { cookie: adminCookie }, payload: {
+      storageMode: "WEBDAV", webdavUrl: "https://dav.example.com/files/user/", webdavPath: "/issueflow/attachments/", webdavUsername: "alice", webdavPassword: "secret",
+    } });
+    expect(configured.statusCode).toBe(200);
+    expect(json<{ setting: Record<string, unknown> }>(configured).setting).toMatchObject({ storageMode: "WEBDAV", enabled: false, webdavUrl: "https://dav.example.com/files/user", webdavPath: "issueflow/attachments", hasWebdavUsername: true, hasWebdavPassword: true });
+    expect(JSON.stringify(json(configured))).not.toContain("secret");
+    expect((await app.inject({ method: "POST", url: "/api/admin/storage/webdav/test", headers: { cookie: adminCookie } })).statusCode).toBe(200);
+
+    const issue = await prisma.issue.create({ data: { title: "WebDAV attachment", authorId: userAId } });
+    const contents = Buffer.from("stored in webdav");
+    const upload = multipartImage(contents, "text/plain", "webdav.txt");
+    const uploaded = await app.inject({ method: "POST", url: `/api/issues/${issue.id}/attachments`, headers: { ...upload.headers, cookie: userACookie }, payload: upload.payload });
+    expect(uploaded.statusCode).toBe(201);
+    const attachment = await prisma.issueAttachment.findUniqueOrThrow({ where: { id: json<{ id: number }>(uploaded).id } });
+    expect(attachment.storageType).toBe("WEBDAV");
+    expect(attachment.storageName).toMatch(/^issueflow\/attachments\/[0-9a-f-]{36}\.bin$/);
+    const objectUrl = `https://dav.example.com/files/user/${attachment.storageName}`;
+    expect(webdavObjects.get(objectUrl)?.equals(contents)).toBe(true);
+    const downloaded = await app.inject({ method: "GET", url: json<{ url: string }>(uploaded).url, headers: { cookie: userACookie } });
+    expect(downloaded.rawPayload.equals(contents)).toBe(true);
+    expect((await app.inject({ method: "DELETE", url: `/api/attachments/${attachment.id}`, headers: { cookie: userACookie } })).statusCode).toBe(204);
+    expect(webdavObjects.has(objectUrl)).toBe(false);
+
+    const local = await app.inject({ method: "PUT", url: "/api/admin/storage/oss", headers: { cookie: adminCookie }, payload: { storageMode: "LOCAL" } });
+    expect(json<{ setting: { storageMode: string; enabled: boolean } }>(local).setting).toMatchObject({ storageMode: "LOCAL", enabled: false });
   });
 
   it("allows an assignee to close an issue but rejects content edits", async () => {

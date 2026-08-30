@@ -20,6 +20,7 @@ export const DEFAULT_OSS_PREFIX = "issueflow/attachments";
 
 export function publicOssSetting(setting: OssSetting | null) {
   return {
+    storageMode: setting?.storageMode ?? (setting?.enabled ? "S3" : "LOCAL"),
     enabled: setting?.enabled ?? false,
     endpoint: setting?.endpoint ?? "",
     region: setting?.region ?? "us-east-1",
@@ -28,6 +29,10 @@ export function publicOssSetting(setting: OssSetting | null) {
     forcePathStyle: setting?.forcePathStyle ?? false,
     hasAccessKeyId: Boolean(setting?.accessKeyIdEncrypted),
     hasAccessKeySecret: Boolean(setting?.accessKeySecretEncrypted),
+    webdavUrl: setting?.webdavUrl ?? "",
+    webdavPath: setting?.webdavPath ?? DEFAULT_OSS_PREFIX,
+    hasWebdavUsername: Boolean(setting?.webdavUsernameEncrypted),
+    hasWebdavPassword: Boolean(setting?.webdavPasswordEncrypted),
     lastTestedAt: setting?.lastTestedAt ?? null,
     lastTestStatus: setting?.lastTestStatus ?? null,
     lastTestMessage: setting?.lastTestMessage ?? null,

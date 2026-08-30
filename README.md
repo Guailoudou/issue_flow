@@ -71,7 +71,7 @@ docker compose --env-file .env.docker down
 
 “管理后台 → 提交操作”可自定义 `#关键字Issue编号` 指令，使 Push 提交修改 Issue 的开放/关闭状态、添加标签，或同时执行两者。系统默认提供 `#o4`（开启 4 号 Issue）和 `#c4`（关闭 4 号 Issue）。
 
-配置云效个人访问令牌、AI API Key 或 S3 AccessKey 前，需要在 `apps/api/.env` 设置共用的 32 字节加密密钥：
+配置云效个人访问令牌、AI API Key、S3 AccessKey 或 WebDAV 凭据前，需要在 `apps/api/.env` 设置共用的 32 字节加密密钥：
 
 ```bash
 openssl rand -hex 32
@@ -85,11 +85,11 @@ openssl rand -hex 32
 
 AI API Key 与云效凭据复用 `YUNXIAO_ENCRYPTION_KEY` 加密；Docker 部署使用 `ISSUEFLOW_YUNXIAO_ENCRYPTION_KEY`。API Key 只会加密存储，管理接口不会返回明文。
 
-## S3 兼容附件存储
+## 附件存储
 
-管理员可在“管理后台 → S3 存储”配置 Endpoint、可选 Region、Bucket、对象前缀、寻址方式和 AccessKey，并测试 Bucket 连接；Region 留空时使用 `us-east-1`。支持 AWS S3、阿里云 OSS、MinIO 及其他实现标准 S3 API 的对象存储。关闭 S3 后可清除已保存的 AccessKey 凭据。启用后新上传的附件写入对象存储；配置前上传的附件仍保留在服务器本地，不会自动迁移。附件列表、下载地址和权限校验保持不变，对象由 API 代理读取，无需公开 Bucket。
+管理员可在“管理后台 → 附件存储”选择服务器本地、S3 兼容存储或 WebDAV，三个模式互斥，只影响保存配置后新上传的附件。旧附件仍从原存储读取，不会自动迁移；附件列表、下载地址和权限校验保持不变。
 
-AccessKey 与云效凭据、AI API Key 复用 `YUNXIAO_ENCRYPTION_KEY` 加密，保存后管理接口不会返回明文。建议使用仅具有目标 Bucket 对象读写权限的凭据。阿里云 OSS 需填写 S3 兼容 Endpoint（例如 `https://s3.oss-cn-hangzhou.aliyuncs.com`）并关闭路径寻址；MinIO 通常需要开启路径寻址。
+S3 模式需要 Endpoint、Bucket、对象前缀和 AccessKey，Region 可留空（默认使用 `us-east-1`）。支持 AWS S3、阿里云 OSS、MinIO 及其他标准 S3 API 服务。WebDAV 模式需要服务根地址、附件目录、用户名和密码。两类凭据与云效凭据、AI API Key 复用 `YUNXIAO_ENCRYPTION_KEY` 加密，管理接口不会返回明文；建议授予专用目录的最小读写权限。
 
 ## 常用命令
 

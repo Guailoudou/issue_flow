@@ -119,6 +119,7 @@ model IssueAttachment {
 
 model OssSetting {
   id                       Int       @id @default(1)
+  storageMode              String    @default("LOCAL")
   enabled                  Boolean   @default(false)
   endpoint                 String    @default("")
   region                   String    @default("us-east-1")
@@ -127,6 +128,10 @@ model OssSetting {
   forcePathStyle           Boolean   @default(false)
   accessKeyIdEncrypted     String?
   accessKeySecretEncrypted String?
+  webdavUrl                String    @default("")
+  webdavPath               String    @default("issueflow/attachments")
+  webdavUsernameEncrypted  String?
+  webdavPasswordEncrypted  String?
   lastTestedAt             DateTime?
   lastTestStatus           String?
   lastTestMessage          String?

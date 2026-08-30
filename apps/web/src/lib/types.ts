@@ -40,6 +40,7 @@ export interface YunxiaoIntegrationResponse {
   webhook: { url: string; events: string[] };
 }
 export interface OssSetting {
+  storageMode: 'LOCAL' | 'S3' | 'WEBDAV';
   enabled: boolean;
   endpoint: string;
   region: string;
@@ -48,6 +49,10 @@ export interface OssSetting {
   forcePathStyle: boolean;
   hasAccessKeyId: boolean;
   hasAccessKeySecret: boolean;
+  webdavUrl: string;
+  webdavPath: string;
+  hasWebdavUsername: boolean;
+  hasWebdavPassword: boolean;
   lastTestedAt?: string | null;
   lastTestStatus?: string | null;
   lastTestMessage?: string | null;

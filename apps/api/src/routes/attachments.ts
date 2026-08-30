@@ -6,13 +6,14 @@ import type { FastifyInstance } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import { ApiError } from "../errors";
 import { asOssError, createOssClient, type OssOptions } from "../storage/oss";
+import { asWebDavError, createWebDavClient, type WebDavOptions } from "../storage/webdav";
 import { isAdmin, parseId, timelineData } from "../utils";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS = 20;
 const uploaderSelect = { id: true, username: true, displayName: true, email: true, role: true, active: true, createdAt: true, updatedAt: true } as const;
 
-export interface AttachmentRouteOptions { uploadDir?: string; oss?: OssOptions }
+export interface AttachmentRouteOptions { uploadDir?: string; oss?: OssOptions; webdav?: WebDavOptions }
 
 function defaultUploadDir() {
   const cwd = process.cwd();
@@ -26,15 +27,16 @@ export function resolveUploadDir(option?: string) {
 const PREVIEWABLE_IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 export const isPreviewableImageMime = (mimeType: string) => PREVIEWABLE_IMAGE_MIMES.has(mimeType.toLowerCase());
 
-export async function readAttachmentBuffer(prisma: PrismaClient, uploadDir: string, attachment: { storageType: string; storageName: string }, options?: OssOptions) {
-  if (attachment.storageType !== "OSS") return readFile(resolveAttachmentPath(uploadDir, attachment.storageName));
+export async function readAttachmentBuffer(prisma: PrismaClient, uploadDir: string, attachment: { storageType: string; storageName: string }, options: AttachmentRouteOptions = {}) {
+  if (attachment.storageType === "LOCAL") return readFile(resolveAttachmentPath(uploadDir, attachment.storageName));
   const setting = await prisma.ossSetting.findUnique({ where: { id: 1 } });
-  if (!setting) throw new ApiError(503, "S3_NOT_CONFIGURED", "S3 storage is not configured");
+  if (!setting) throw new ApiError(503, "REMOTE_STORAGE_NOT_CONFIGURED", "Remote storage is not configured");
   try {
-    const result = await createOssClient(setting, options).get(attachment.storageName);
+    if (attachment.storageType === "WEBDAV") return await createWebDavClient(setting, options.webdav).get(attachment.storageName);
+    const result = await createOssClient(setting, options.oss).get(attachment.storageName);
     if (!result.content) throw new ApiError(404, "ATTACHMENT_CONTENT_NOT_FOUND", "Attachment content not found");
     return Buffer.from(result.content);
-  } catch (error) { throw asOssError(error, "download"); }
+  } catch (error) { throw attachment.storageType === "WEBDAV" ? asWebDavError(error, "download") : asOssError(error, "download"); }
 }
 
 function normalizedMimeType(value: string | undefined) {
@@ -107,18 +109,21 @@ export async function attachmentRoutes(app: FastifyInstance, prisma: PrismaClien
     const mimeType = normalizedMimeType(part.mimetype);
 
     const ossSetting = await prisma.ossSetting.findUnique({ where: { id: 1 } });
-    const storageType = ossSetting?.enabled ? "OSS" : "LOCAL";
-    const storageName = storageType === "OSS" ? `${ossSetting!.prefix}/${randomUUID()}.bin` : `${randomUUID()}.bin`;
+    const storageMode = ossSetting?.storageMode ?? (ossSetting?.enabled ? "S3" : "LOCAL");
+    const storageType = storageMode === "S3" ? "OSS" : storageMode;
+    const storageName = storageType === "OSS" ? `${ossSetting!.prefix}/${randomUUID()}.bin` : storageType === "WEBDAV" ? `${ossSetting!.webdavPath}/${randomUUID()}.bin` : `${randomUUID()}.bin`;
     const filePath = storageType === "LOCAL" ? resolveAttachmentPath(uploadDir, storageName) : null;
     const ossClient = storageType === "OSS" ? createOssClient(ossSetting!, options.oss) : null;
+    const webdavClient = storageType === "WEBDAV" ? createWebDavClient(ossSetting!, options.webdav) : null;
     try {
       if (ossClient) await ossClient.put(storageName, buffer, { mime: mimeType });
+      else if (webdavClient) await webdavClient.put(storageName, buffer, mimeType);
       else {
         await mkdir(uploadDir, { recursive: true });
         await writeFile(filePath!, buffer, { flag: "wx" });
       }
     } catch (error) {
-      throw storageType === "OSS" ? asOssError(error, "upload") : error;
+      throw storageType === "OSS" ? asOssError(error, "upload") : storageType === "WEBDAV" ? asWebDavError(error, "upload") : error;
     }
     try {
       const attachment = await prisma.$transaction(async (tx) => {
@@ -134,6 +139,7 @@ export async function attachmentRoutes(app: FastifyInstance, prisma: PrismaClien
       return serializeAttachment(attachment, request.currentUser, issue.authorId);
     } catch (error) {
       if (ossClient) await ossClient.delete(storageName).catch(() => undefined);
+      else if (webdavClient) await webdavClient.delete(storageName).catch(() => undefined);
       else await unlink(filePath!).catch(() => undefined);
       throw error;
     }
@@ -152,6 +158,11 @@ export async function attachmentRoutes(app: FastifyInstance, prisma: PrismaClien
         if (!result.stream) throw new ApiError(404, "ATTACHMENT_CONTENT_NOT_FOUND", "Attachment content not found");
         content = result.stream;
       } catch (error) { throw asOssError(error, "download"); }
+    } else if (attachment.storageType === "WEBDAV") {
+      const setting = await prisma.ossSetting.findUnique({ where: { id: 1 } });
+      if (!setting) throw new ApiError(503, "WEBDAV_NOT_CONFIGURED", "WebDAV storage is not configured");
+      try { content = await createWebDavClient(setting, options.webdav).get(attachment.storageName); }
+      catch (error) { throw asWebDavError(error, "download"); }
     } else {
       const filePath = resolveAttachmentPath(uploadDir, attachment.storageName);
       let fileStat;
@@ -182,6 +193,9 @@ export async function attachmentRoutes(app: FastifyInstance, prisma: PrismaClien
     if (attachment.storageType === "OSS") {
       const setting = await prisma.ossSetting.findUnique({ where: { id: 1 } });
       if (setting) try { await createOssClient(setting, options.oss).delete(attachment.storageName); } catch { /* Database deletion remains authoritative, matching local storage cleanup. */ }
+    } else if (attachment.storageType === "WEBDAV") {
+      const setting = await prisma.ossSetting.findUnique({ where: { id: 1 } });
+      if (setting) try { await createWebDavClient(setting, options.webdav).delete(attachment.storageName); } catch { /* Database deletion remains authoritative. */ }
     } else await unlink(resolveAttachmentPath(uploadDir, attachment.storageName)).catch(() => undefined);
     return reply.status(204).send();
   });

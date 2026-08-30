@@ -34,7 +34,7 @@ export async function buildApp(options: { prisma?: PrismaClient; logger?: boolea
     await authRoutes(api, prisma);
     await apiTokenRoutes(api, prisma);
     await adminRoutes(api, prisma, options.ai);
-    await ossRoutes(api, prisma, options.attachments?.oss);
+    await ossRoutes(api, prisma, { ...(options.attachments?.oss ? { oss: options.attachments.oss } : {}), ...(options.attachments?.webdav ? { webdav: options.attachments.webdav } : {}) });
     await issueRoutes(api, prisma, options.ai);
     await attachmentRoutes(api, prisma, options.attachments);
     await exportRoutes(api, prisma, options.attachments);
