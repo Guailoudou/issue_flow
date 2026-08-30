@@ -3,6 +3,7 @@ import type { Prisma, PrismaClient, User } from "@prisma/client";
 import { createIssueSchema, issueQuerySchema, subscriptionSchema, updateIssueSchema } from "@issueflow/shared";
 import { ApiError } from "../errors";
 import { hasRole, isAdmin, issueAccess, notifyIssue, parseId, timelineData } from "../utils";
+import { assignAiLabels, type AiOptions } from "../ai/labeler";
 
 const userSelect = { id: true, username: true, displayName: true, email: true, role: true, active: true, createdAt: true, updatedAt: true, businessRoles: { select: { role: true } } } as const;
 const issueInclude = {
@@ -29,7 +30,7 @@ async function validateRelations(prisma: PrismaClient, productOwnerIds?: number[
 
 const diff = (oldIds: number[], nextIds: number[]) => ({ added: nextIds.filter((id) => !oldIds.includes(id)), removed: oldIds.filter((id) => !nextIds.includes(id)) });
 
-export async function issueRoutes(app: FastifyInstance, prisma: PrismaClient) {
+export async function issueRoutes(app: FastifyInstance, prisma: PrismaClient, aiOptions: AiOptions = {}) {
   app.get("/issues", { preHandler: app.authenticate }, async (request) => {
     const query = issueQuerySchema.parse(request.query);
     const setting = await prisma.platformSetting.findUniqueOrThrow({ where: { id: 1 } });
@@ -85,8 +86,16 @@ export async function issueRoutes(app: FastifyInstance, prisma: PrismaClient) {
       return created;
     });
     await notifyIssue(prisma, issue.id, request.currentUser.id, "ASSIGNED", `You were assigned to #${issue.id}`, [...productOwnerIds, ...developerOwnerIds]);
+    let result = issue;
+    if (!input.labelIds?.length) {
+      try {
+        if ((await assignAiLabels(prisma, issue, setting, aiOptions)).length) result = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id }, include: issueInclude });
+      } catch (error) {
+        request.log.warn({ err: error }, "AI issue labeling failed");
+      }
+    }
     reply.status(201);
-    return issue;
+    return result;
   });
 
   app.patch("/issues/:id", { preHandler: app.authenticate }, async (request) => {

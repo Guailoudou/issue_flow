@@ -1,0 +1,5 @@
+ALTER TABLE "PlatformSetting" ADD COLUMN "aiEnabled" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "PlatformSetting" ADD COLUMN "aiUrl" TEXT NOT NULL DEFAULT '';
+ALTER TABLE "PlatformSetting" ADD COLUMN "aiModel" TEXT NOT NULL DEFAULT '';
+ALTER TABLE "PlatformSetting" ADD COLUMN "aiApiKeyEncrypted" TEXT;
+ALTER TABLE "PlatformSetting" ADD COLUMN "aiMaxLabels" INTEGER NOT NULL DEFAULT 3;

@@ -18,9 +18,16 @@ let issueId = 0;
 let attachmentId = 0;
 let uploadDir = "";
 const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+const aiFetchCalls: Array<{ url: string; init?: RequestInit }> = [];
 const mockFetch = async (input: string | URL | Request, init?: RequestInit) => {
   fetchCalls.push({ url: String(input), ...(init ? { init } : {}) });
   return new Response(JSON.stringify({ id: 88, name: "repo" }), { status: 200, headers: { "content-type": "application/json" } });
+};
+const mockAiFetch = async (input: string | URL | Request, init?: RequestInit) => {
+  aiFetchCalls.push({ url: String(input), ...(init ? { init } : {}) });
+  const request = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content: string }> };
+  const prompt = JSON.parse(request.messages.find(({ role }) => role === "user")?.content ?? "{}") as { labels?: Array<{ id: number }> };
+  return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ labelIds: prompt.labels?.[0] ? [prompt.labels[0].id] : [] }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
 };
 
 const cookieFrom = (headers: Record<string, unknown>) => String(headers["set-cookie"]).split(";")[0] ?? "";
@@ -61,7 +68,7 @@ beforeAll(async () => {
   await prisma.session.deleteMany();
   await prisma.user.deleteMany();
   await prisma.platformSetting.deleteMany();
-  app = await buildApp({ prisma, attachments: { uploadDir }, yunxiao: { encryptionKey: "11".repeat(32), webhookBaseUrl: "https://issues.example.com", fetchImpl: mockFetch, timeoutMs: 100 } });
+  app = await buildApp({ prisma, attachments: { uploadDir }, yunxiao: { encryptionKey: "11".repeat(32), webhookBaseUrl: "https://issues.example.com", fetchImpl: mockFetch, timeoutMs: 100 }, ai: { encryptionKey: "22".repeat(32), fetchImpl: mockAiFetch, timeoutMs: 100 } });
 });
 afterAll(async () => { if (app) await app.close(); await prisma.$disconnect(); if (uploadDir) await rm(uploadDir, { recursive: true, force: true }); });
 
@@ -254,6 +261,41 @@ describe.sequential("IssueFlow API", () => {
     expect(json<{ items: Array<{ id: number; issueCount: number }> }>(await app.inject({ method: "GET", url: "/api/labels", headers: { cookie: userACookie } })).items.find(({ id }) => id === labelId)?.issueCount).toBe(1);
   });
 
+  it("uses an OpenAI-compatible request to label unlabeled issues without sending images", async () => {
+    aiFetchCalls.length = 0;
+    const saved = await app.inject({ method: "PUT", url: "/api/admin/settings", headers: { cookie: adminCookie }, payload: {
+      name: "IssueFlow", description: "", logoUrl: "", defaultPageSize: 20, allowUserCreateIssue: true,
+      aiEnabled: true, aiUrl: "https://ai.example.com/v1/chat/completions", aiModel: "test-model", aiApiKey: "private-ai-key", clearAiApiKey: false, aiMaxLabels: 2,
+    } });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.body).not.toContain("private-ai-key");
+    expect(json<{ hasAiApiKey: boolean }>(saved).hasAiApiKey).toBe(true);
+    expect((await app.inject({ method: "GET", url: "/api/settings" })).body).not.toContain("aiApiKey");
+
+    const response = await app.inject({ method: "POST", url: "/api/issues", headers: { cookie: userACookie }, payload: { title: "AI label request", body: "Visible description\n![secret](https://files.example.com/private.png)\n<img src=\"https://files.example.com/other.png\">\n![reference][shot]\n[shot]: https://files.example.com/reference.png" } });
+    expect(response.statusCode).toBe(201);
+    expect(json<{ labels: Array<{ label: { name: string } }> }>(response).labels.map(({ label }) => label.name)).toEqual(["bug"]);
+    expect(aiFetchCalls).toHaveLength(1);
+    const aiCall = aiFetchCalls[0]!;
+    const aiRequest = JSON.parse(String(aiCall.init?.body)) as { model: string; response_format: { type: string }; messages: Array<{ role: string; content: string }> };
+    expect(aiRequest).toMatchObject({ model: "test-model", response_format: { type: "json_object" } });
+    expect(aiCall.init?.headers).toMatchObject({ authorization: "Bearer private-ai-key" });
+    const sentContent = aiRequest.messages.find(({ role }) => role === "user")?.content ?? "";
+    expect(sentContent).toContain("Visible description");
+    expect(sentContent).not.toContain("private.png");
+    expect(sentContent).not.toContain("other.png");
+    expect(sentContent).not.toContain("reference.png");
+
+    const urgent = await prisma.label.findUniqueOrThrow({ where: { name: "urgent" } });
+    expect((await app.inject({ method: "POST", url: "/api/issues", headers: { cookie: userACookie }, payload: { title: "Already labeled", labelIds: [urgent.id] } })).statusCode).toBe(201);
+    expect(aiFetchCalls).toHaveLength(1);
+
+    await app.inject({ method: "PUT", url: "/api/admin/settings", headers: { cookie: adminCookie }, payload: {
+      name: "IssueFlow", description: "", logoUrl: "", defaultPageSize: 20, allowUserCreateIssue: true,
+      aiEnabled: false, aiUrl: "https://ai.example.com/v1/chat/completions", aiModel: "test-model", clearAiApiKey: false, aiMaxLabels: 2,
+    } });
+  });
+
   it("groups awaiting acceptance into the open homepage filter and returns all states without a filter", async () => {
     const prefix = "Homepage state grouping";
     const created = await Promise.all([
@@ -401,7 +443,7 @@ describe.sequential("IssueFlow API", () => {
   });
 
   it("persists settings and rejects stale issue writes", async () => {
-    const setting = await app.inject({ method: "PUT", url: "/api/admin/settings", headers: { cookie: adminCookie }, payload: { name: "Acme Issues", description: "Tracker", logoUrl: "", defaultPageSize: 25, allowUserCreateIssue: true } });
+    const setting = await app.inject({ method: "PUT", url: "/api/admin/settings", headers: { cookie: adminCookie }, payload: { name: "Acme Issues", description: "Tracker", logoUrl: "", defaultPageSize: 25, allowUserCreateIssue: true, aiEnabled: false, aiUrl: "", aiModel: "", clearAiApiKey: false, aiMaxLabels: 3 } });
     expect(json<{ name: string }>(setting).name).toBe("Acme Issues");
     const stale = await app.inject({ method: "PATCH", url: `/api/issues/${issueId}`, headers: { cookie: userACookie }, payload: { title: "Old write", updatedAt: "2020-01-01T00:00:00.000Z" } });
     expect(stale.statusCode).toBe(409);

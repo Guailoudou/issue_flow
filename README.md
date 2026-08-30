@@ -77,6 +77,12 @@ openssl rand -hex 32
 
 将结果填写到 `YUNXIAO_ENCRYPTION_KEY`，并把 `YUNXIAO_WEBHOOK_BASE_URL` 设置为云效可访问的 IssueFlow 公网地址（生产环境应使用 HTTPS）。重启 API 后，再由管理员页面保存云效配置。Token 和 Secret 会加密存储，API 不返回明文。支持云效中心版与 Region 版；可由页面测试 OpenAPI 连接并自动创建 Webhook，也可以按页面展示的 URL 手工配置。
 
+## AI 自动标签
+
+管理员可以在“管理后台 → 平台设置”配置并启用 OpenAI Chat Completions 兼容的 AI URL、模型名称、API Key 和每次最多添加的标签数。新建 Issue 没有选择标签时，系统会把标题、移除图片后的正文和现有标签列表发送给 AI，并自动添加 AI 返回的有效标签；附件和图片不会发送，AI 请求失败也不会影响 Issue 创建。
+
+AI API Key 与云效凭据复用 `YUNXIAO_ENCRYPTION_KEY` 加密；Docker 部署使用 `ISSUEFLOW_YUNXIAO_ENCRYPTION_KEY`。API Key 只会加密存储，管理接口不会返回明文。
+
 ## 常用命令
 
 ```bash

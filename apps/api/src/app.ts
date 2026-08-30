@@ -16,8 +16,9 @@ import { attachmentRoutes, type AttachmentRouteOptions } from "./routes/attachme
 import { exportRoutes } from "./routes/export";
 import { versionRoutes } from "./routes/version";
 import { apiTokenRoutes } from "./routes/apiTokens";
+import type { AiOptions } from "./ai/labeler";
 
-export async function buildApp(options: { prisma?: PrismaClient; logger?: boolean; yunxiao?: YunxiaoRouteOptions; attachments?: AttachmentRouteOptions } = {}) {
+export async function buildApp(options: { prisma?: PrismaClient; logger?: boolean; yunxiao?: YunxiaoRouteOptions; attachments?: AttachmentRouteOptions; ai?: AiOptions } = {}) {
   const app = Fastify({ logger: options.logger ?? false });
   const prisma = options.prisma ?? new PrismaClient();
   await app.register(cookie);
@@ -31,8 +32,8 @@ export async function buildApp(options: { prisma?: PrismaClient; logger?: boolea
     await versionRoutes(api);
     await authRoutes(api, prisma);
     await apiTokenRoutes(api, prisma);
-    await adminRoutes(api, prisma);
-    await issueRoutes(api, prisma);
+    await adminRoutes(api, prisma, options.ai);
+    await issueRoutes(api, prisma, options.ai);
     await attachmentRoutes(api, prisma, options.attachments);
     await exportRoutes(api, prisma, options.attachments);
     await commentRoutes(api, prisma);

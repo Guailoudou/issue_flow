@@ -65,6 +65,11 @@ model PlatformSetting {
   logoUrl              String   @default("")
   defaultPageSize      Int      @default(20)
   allowUserCreateIssue Boolean  @default(true)
+  aiEnabled            Boolean  @default(false)
+  aiUrl                String   @default("")
+  aiModel              String   @default("")
+  aiApiKeyEncrypted    String?
+  aiMaxLabels          Int      @default(3)
   updatedAt            DateTime @updatedAt
 }
 

@@ -1,13 +1,24 @@
 import type { FastifyInstance } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
-import { createUserSchema, labelSchema, milestoneSchema, platformSettingSchema, resetPasswordSchema, updateUserRolesSchema, updateUserSchema } from "@issueflow/shared";
+import { adminPlatformSettingSchema, createUserSchema, labelSchema, milestoneSchema, resetPasswordSchema, updateUserRolesSchema, updateUserSchema } from "@issueflow/shared";
 import { ApiError } from "../errors";
 import { parseId, publicUser } from "../utils";
+import { encryptAiApiKey, type AiOptions } from "../ai/labeler";
 
-export async function adminRoutes(app: FastifyInstance, prisma: PrismaClient) {
-  app.get("/settings", async () => prisma.platformSetting.findUniqueOrThrow({ where: { id: 1 } }));
-  app.put("/admin/settings", { preHandler: app.requireAdmin }, async (request) => prisma.platformSetting.update({ where: { id: 1 }, data: platformSettingSchema.parse(request.body) }));
+const publicSettingSelect = { name: true, description: true, logoUrl: true, defaultPageSize: true, allowUserCreateIssue: true } as const;
+const adminSettingView = ({ aiApiKeyEncrypted, ...setting }: Awaited<ReturnType<PrismaClient["platformSetting"]["findUniqueOrThrow"]>>) => ({ ...setting, hasAiApiKey: !!aiApiKeyEncrypted });
+
+export async function adminRoutes(app: FastifyInstance, prisma: PrismaClient, aiOptions: AiOptions = {}) {
+  app.get("/settings", async () => prisma.platformSetting.findUniqueOrThrow({ where: { id: 1 }, select: publicSettingSelect }));
+  app.get("/admin/settings", { preHandler: app.requireAdmin }, async () => adminSettingView(await prisma.platformSetting.findUniqueOrThrow({ where: { id: 1 } })));
+  app.put("/admin/settings", { preHandler: app.requireAdmin }, async (request) => {
+    const input = adminPlatformSettingSchema.parse(request.body);
+    const current = await prisma.platformSetting.findUniqueOrThrow({ where: { id: 1 } });
+    const { aiApiKey, clearAiApiKey, ...data } = input;
+    const aiApiKeyEncrypted = clearAiApiKey ? null : aiApiKey ? encryptAiApiKey(aiApiKey, aiOptions) : current.aiApiKeyEncrypted;
+    return adminSettingView(await prisma.platformSetting.update({ where: { id: 1 }, data: { ...data, aiApiKeyEncrypted } }));
+  });
 
   app.get("/users", { preHandler: app.authenticate }, async () => {
     const users = await prisma.user.findMany({ orderBy: { username: "asc" }, include: { businessRoles: true } });

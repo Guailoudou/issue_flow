@@ -44,6 +44,20 @@ export const platformSettingSchema = z.object({
   allowUserCreateIssue: z.boolean(),
 });
 
+const aiUrlSchema = z.union([z.literal(""), z.string().trim().url().max(1000).refine((value) => ["http:", "https:"].includes(new URL(value).protocol), "AI URL must use HTTP or HTTPS")]);
+export const adminPlatformSettingSchema = platformSettingSchema.extend({
+  aiEnabled: z.boolean(),
+  aiUrl: aiUrlSchema,
+  aiModel: z.string().trim().max(200),
+  aiApiKey: z.string().trim().min(1).max(4000).optional(),
+  clearAiApiKey: z.boolean().default(false),
+  aiMaxLabels: z.number().int().min(1).max(5),
+}).superRefine((value, context) => {
+  if (value.aiEnabled && !value.aiUrl) context.addIssue({ code: "custom", path: ["aiUrl"], message: "AI URL is required when AI labeling is enabled" });
+  if (value.aiEnabled && !value.aiModel) context.addIssue({ code: "custom", path: ["aiModel"], message: "AI model is required when AI labeling is enabled" });
+  if (value.aiApiKey && value.clearAiApiKey) context.addIssue({ code: "custom", path: ["clearAiApiKey"], message: "Cannot set and clear the AI API key at the same time" });
+});
+
 export const labelSchema = z.object({
   name: z.string().trim().min(1).max(50),
   description: z.string().max(200).default(""),
@@ -127,6 +141,7 @@ export type UpdateUserInput = z.infer<typeof updateUserSchema>;
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
 export type PlatformSettingInput = z.infer<typeof platformSettingSchema>;
+export type AdminPlatformSettingInput = z.infer<typeof adminPlatformSettingSchema>;
 export type LabelInput = z.infer<typeof labelSchema>;
 export type MilestoneInput = z.infer<typeof milestoneSchema>;
 export type CreateIssueInput = z.infer<typeof createIssueSchema>;
