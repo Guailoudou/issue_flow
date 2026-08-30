@@ -1,18 +1,21 @@
-import type { PrismaClient, User } from "@prisma/client";
+import type { PrismaClient, User, UserRole } from "@prisma/client";
 import { ApiError } from "./errors";
 
-export const publicUser = ({ passwordHash: _, ...user }: User) => user;
+type UserWithRoles = User & { businessRoles?: UserRole[] };
+export const publicUser = ({ passwordHash: _, businessRoles = [], ...user }: UserWithRoles) => ({ ...user, roles: businessRoles.map(({ role }) => role) });
+export const hasRole = (user: UserWithRoles, role: string) => user.businessRoles?.some((item) => item.role === role) ?? false;
+export const isAdmin = (user: UserWithRoles) => user.role === "ADMIN" || hasRole(user, "MANAGEMENT");
 export const parseId = (value: unknown) => {
   const id = Number(value);
   if (!Number.isInteger(id) || id <= 0) throw new ApiError(400, "VALIDATION_ERROR", "Invalid numeric identifier");
   return id;
 };
 
-export async function issueAccess(prisma: PrismaClient, issueId: number, user: User, mode: "edit" | "manage") {
+export async function issueAccess(prisma: PrismaClient, issueId: number, user: UserWithRoles, mode: "edit" | "manage") {
   const issue = await prisma.issue.findUnique({ where: { id: issueId }, include: { assignees: true } });
   if (!issue) throw new ApiError(404, "ISSUE_NOT_FOUND", "Issue not found");
   const assigned = issue.assignees.some((item) => item.userId === user.id);
-  const allowed = user.role === "ADMIN" || issue.authorId === user.id || (mode === "manage" && assigned);
+  const allowed = isAdmin(user) || issue.authorId === user.id || (mode === "manage" && assigned);
   if (!allowed) throw new ApiError(403, "FORBIDDEN", "You do not have permission to modify this issue");
   return issue;
 }

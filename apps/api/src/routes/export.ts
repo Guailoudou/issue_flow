@@ -80,8 +80,8 @@ async function createWorkbook(prisma: PrismaClient, uploadDir: string, query: Re
       issue.attachments.length ? `附件：${issue.attachments.length} 个` : "",
     ].filter(Boolean).join("\n");
     const values: Array<string | number | Date | null> = [
-      `#${issue.id} ${issue.title}`, issue.author.displayName, delivered ? "已交付" : awaitingAcceptance ? "待验收" : "开放", issue.body, "", notes,
-      issue.assignees.map(({ user }) => user.displayName).join("、"), delivered ? "已交付" : awaitingAcceptance ? "待验收" : "开发中", "",
+      `#${issue.id} ${issue.title}`, issue.assignees.filter(({ ownerType }) => ownerType === "PRODUCT").map(({ user }) => user.displayName).join("、"), delivered ? "已交付" : awaitingAcceptance ? "待验收" : "开放", issue.body, "", notes,
+      issue.assignees.filter(({ ownerType }) => ownerType === "DEVELOPMENT").map(({ user }) => user.displayName).join("、"), delivered ? "已交付" : awaitingAcceptance ? "待验收" : "开发中", "",
       issue.createdAt, issue.closedAt, delivered ? 1 : 0, "", delivered ? 1 : 0,
     ];
     for (let column = 1; column <= HEADERS.length; column += 1) {

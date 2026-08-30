@@ -1,16 +1,17 @@
 export type Role = 'ADMIN' | 'USER';
+export type BusinessRole = 'MANAGEMENT' | 'DEVELOPMENT' | 'PRODUCT';
 export type IssueStatus = 'OPEN' | 'AWAITING_ACCEPTANCE' | 'CLOSED';
 export type MilestoneStatus = 'OPEN' | 'CLOSED';
 
 export type EntityId = number;
-export interface User { id: EntityId; username: string; displayName: string; email?: string; role: Role; active: boolean; avatarUrl?: string; createdAt?: string; updatedAt?: string }
+export interface User { id: EntityId; username: string; displayName: string; email?: string; role: Role; roles?: BusinessRole[]; active: boolean; avatarUrl?: string; createdAt?: string; updatedAt?: string }
 export interface Label { id: EntityId; name: string; description?: string; color: string }
 export interface Milestone { id: EntityId; title: string; description?: string; dueDate?: string | null; status?: MilestoneStatus; state?: MilestoneStatus; openIssues?: number; closedIssues?: number }
 export interface Comment { id: EntityId; body: string; author: User; createdAt: string; updatedAt?: string; deletedAt?: string | null }
 export interface TimelineEvent { id: EntityId; type: string; actor: User; createdAt: string; metadata?: Record<string, unknown>; data?: Record<string, unknown>; comment?: Comment }
 export interface Issue {
   id: EntityId; number: number; title: string; body?: string; status: IssueStatus; state?: IssueStatus; author: User;
-  assignees: User[]; labels: Label[]; milestone?: Milestone | null; commentsCount?: number;
+  assignees: User[]; productOwners: User[]; developerOwners: User[]; labels: Label[]; milestone?: Milestone | null; commentsCount?: number; isProductIssue?: boolean;
   createdAt: string; updatedAt: string; subscribed?: boolean;
 }
 export interface Notification { id: EntityId; type: string; title?: string; message: string; readAt?: string | null; createdAt: string; issue?: Pick<Issue, 'id' | 'number' | 'title'> }

@@ -18,7 +18,7 @@ function inviteCodeMatches(provided: string) {
 export async function authRoutes(app: FastifyInstance, prisma: PrismaClient) {
   app.post("/auth/login", async (request, reply) => {
     const input = loginSchema.parse(request.body);
-    const user = await prisma.user.findUnique({ where: { username: input.username } });
+    const user = await prisma.user.findUnique({ where: { username: input.username }, include: { businessRoles: true } });
     if (!user || !user.active || !(await bcrypt.compare(input.password, user.passwordHash))) throw new ApiError(401, "INVALID_CREDENTIALS", "Invalid username or password");
     const session = await createSession(prisma, user.id);
     reply.setCookie(COOKIE_NAME, session.token, cookieOptions(session.expiresAt));
@@ -29,7 +29,7 @@ export async function authRoutes(app: FastifyInstance, prisma: PrismaClient) {
     const input = registerUserSchema.parse(request.body);
     if (!inviteCodeMatches(input.inviteCode)) throw new ApiError(403, "INVALID_INVITE_CODE", "Invalid invitation code");
     const { password, inviteCode: _, ...profile } = input;
-    const user = await prisma.user.create({ data: { ...profile, email: profile.email || null, passwordHash: await bcrypt.hash(password, 12) } });
+    const user = await prisma.user.create({ data: { ...profile, email: profile.email || null, passwordHash: await bcrypt.hash(password, 12), businessRoles: { create: { role: "DEVELOPMENT" } } }, include: { businessRoles: true } });
     const session = await createSession(prisma, user.id);
     reply.status(201).setCookie(COOKIE_NAME, session.token, cookieOptions(session.expiresAt));
     return { user: publicUser(user) };
@@ -45,7 +45,7 @@ export async function authRoutes(app: FastifyInstance, prisma: PrismaClient) {
 
   app.patch("/auth/profile", { preHandler: app.authenticate }, async (request) => {
     const input = updateProfileSchema.parse(request.body);
-    const user = await prisma.user.update({ where: { id: request.currentUser.id }, data: { displayName: input.displayName } });
+    const user = await prisma.user.update({ where: { id: request.currentUser.id }, data: { displayName: input.displayName }, include: { businessRoles: true } });
     return { user: publicUser(user) };
   });
 

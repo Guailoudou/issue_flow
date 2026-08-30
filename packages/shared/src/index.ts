@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const USER_ROLES = ["ADMIN", "USER"] as const;
+export const BUSINESS_ROLES = ["MANAGEMENT", "DEVELOPMENT", "PRODUCT"] as const;
 export const ISSUE_STATES = ["OPEN", "AWAITING_ACCEPTANCE", "CLOSED"] as const;
 export const MILESTONE_STATES = ["OPEN", "CLOSED"] as const;
 export const SORT_FIELDS = ["createdAt", "updatedAt"] as const;
@@ -27,6 +28,7 @@ export const updateUserSchema = z.object({
   email: optionalEmailSchema,
   active: z.boolean().optional(),
 }).refine((value) => Object.keys(value).length > 0, "At least one field is required");
+export const updateUserRolesSchema = z.object({ roles: z.array(z.enum(BUSINESS_ROLES)).min(1).max(BUSINESS_ROLES.length) });
 export const resetPasswordSchema = z.object({ password: passwordSchema });
 export const updateProfileSchema = z.object({ displayName: z.string().trim().min(1).max(80) });
 export const changePasswordSchema = z.object({
@@ -56,6 +58,8 @@ export const milestoneSchema = z.object({
 
 const relationsSchema = z.object({
   assigneeIds: z.array(idSchema).max(20).optional(),
+  productOwnerIds: z.array(idSchema).max(20).optional(),
+  developerOwnerIds: z.array(idSchema).max(20).optional(),
   labelIds: z.array(idSchema).max(30).optional(),
   milestoneId: idSchema.nullable().optional(),
 });
@@ -146,6 +150,7 @@ export interface PublicUser {
   displayName: string;
   email: string | null;
   role: (typeof USER_ROLES)[number];
+  roles: (typeof BUSINESS_ROLES)[number][];
   active: boolean;
   createdAt: string;
   updatedAt: string;

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
-import { createUserSchema, labelSchema, milestoneSchema, platformSettingSchema, resetPasswordSchema, updateUserSchema } from "@issueflow/shared";
+import { createUserSchema, labelSchema, milestoneSchema, platformSettingSchema, resetPasswordSchema, updateUserRolesSchema, updateUserSchema } from "@issueflow/shared";
 import { ApiError } from "../errors";
 import { parseId, publicUser } from "../utils";
 
@@ -10,13 +10,13 @@ export async function adminRoutes(app: FastifyInstance, prisma: PrismaClient) {
   app.put("/admin/settings", { preHandler: app.requireAdmin }, async (request) => prisma.platformSetting.update({ where: { id: 1 }, data: platformSettingSchema.parse(request.body) }));
 
   app.get("/users", { preHandler: app.authenticate }, async () => {
-    const users = await prisma.user.findMany({ orderBy: { username: "asc" } });
+    const users = await prisma.user.findMany({ orderBy: { username: "asc" }, include: { businessRoles: true } });
     return { items: users.map(publicUser) };
   });
   app.post("/admin/users", { preHandler: app.requireAdmin }, async (request, reply) => {
     const input = createUserSchema.parse(request.body);
     const { password, ...profile } = input;
-    const user = await prisma.user.create({ data: { ...profile, email: profile.email || null, passwordHash: await bcrypt.hash(password, 12) } });
+    const user = await prisma.user.create({ data: { ...profile, email: profile.email || null, passwordHash: await bcrypt.hash(password, 12), businessRoles: { create: { role: "DEVELOPMENT" } } }, include: { businessRoles: true } });
     reply.status(201);
     return { user: publicUser(user) };
   });
@@ -33,8 +33,20 @@ export async function adminRoutes(app: FastifyInstance, prisma: PrismaClient) {
       ...(input.active !== undefined ? { active: input.active } : {}),
       ...(input.email !== undefined ? { email: input.email || null } : {}),
     };
-    const user = await prisma.user.update({ where: { id }, data });
+    const user = await prisma.user.update({ where: { id }, data, include: { businessRoles: true } });
     if (input.active === false) await prisma.$transaction([prisma.session.deleteMany({ where: { userId: id } }), prisma.apiToken.deleteMany({ where: { userId: id } })]);
+    return { user: publicUser(user) };
+  });
+  app.put("/admin/users/:id/roles", { preHandler: app.authenticate }, async (request) => {
+    if (request.currentUser.role !== "ADMIN") throw new ApiError(403, "FORBIDDEN", "Only administrators can change user roles");
+    const id = parseId((request.params as { id: string }).id);
+    const { roles } = updateUserRolesSchema.parse(request.body);
+    if (!(await prisma.user.findUnique({ where: { id }, select: { id: true } }))) throw new ApiError(404, "USER_NOT_FOUND", "User not found");
+    const user = await prisma.$transaction(async (tx) => {
+      await tx.userRole.deleteMany({ where: { userId: id } });
+      await tx.userRole.createMany({ data: [...new Set(roles)].map((role) => ({ userId: id, role })) });
+      return tx.user.findUniqueOrThrow({ where: { id }, include: { businessRoles: true } });
+    });
     return { user: publicUser(user) };
   });
   app.post("/admin/users/:id/reset-password", { preHandler: app.requireAdmin }, async (request) => {

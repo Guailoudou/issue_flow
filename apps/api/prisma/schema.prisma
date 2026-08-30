@@ -26,6 +26,7 @@ model User {
   subscriptions Subscription[]
   notifications Notification[]
   attachments   IssueAttachment[] @relation("AttachmentUploader")
+  businessRoles UserRole[]
 
   @@index([active])
 }
@@ -77,6 +78,7 @@ model Issue {
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
   closedAt       DateTime?
+  isProductIssue Boolean           @default(false)
   author         User              @relation("IssueAuthor", fields: [authorId], references: [id], onDelete: Restrict)
   milestone      Milestone?        @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
   assignees      IssueAssignee[]
@@ -162,13 +164,23 @@ model WebhookDelivery {
 }
 
 model IssueAssignee {
-  issueId Int
-  userId  Int
-  issue   Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
-  user    User  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  issueId   Int
+  userId    Int
+  ownerType String @default("DEVELOPMENT")
+  issue     Issue  @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  user      User   @relation(fields: [userId], references: [id], onDelete: Restrict)
 
-  @@id([issueId, userId])
+  @@id([issueId, userId, ownerType])
   @@index([userId])
+}
+
+model UserRole {
+  userId Int
+  role   String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, role])
+  @@index([role])
 }
 
 model Label {

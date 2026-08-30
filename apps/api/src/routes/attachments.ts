@@ -5,7 +5,7 @@ import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import { ApiError } from "../errors";
-import { parseId, timelineData } from "../utils";
+import { isAdmin, parseId, timelineData } from "../utils";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS = 20;
@@ -40,7 +40,7 @@ export function resolveAttachmentPath(uploadDir: string, storageName: string) {
 function serializeAttachment(attachment: {
   id: number; issueId: number; uploaderId: number; fileName: string; mimeType: string; size: number; createdAt: Date;
   uploader: typeof uploaderSelect extends never ? never : Record<string, unknown>;
-}, currentUser: { id: number; role: string }, issueAuthorId: number) {
+}, currentUser: Parameters<typeof isAdmin>[0], issueAuthorId: number) {
   return {
     id: attachment.id,
     issueId: attachment.issueId,
@@ -50,7 +50,7 @@ function serializeAttachment(attachment: {
     url: `/api/attachments/${attachment.id}/content`,
     createdAt: attachment.createdAt,
     uploader: attachment.uploader,
-    canDelete: currentUser.role === "ADMIN" || currentUser.id === attachment.uploaderId || currentUser.id === issueAuthorId,
+    canDelete: isAdmin(currentUser) || currentUser.id === attachment.uploaderId || currentUser.id === issueAuthorId,
   };
 }
 
@@ -137,7 +137,7 @@ export async function attachmentRoutes(app: FastifyInstance, prisma: PrismaClien
     const id = parseId((request.params as { id: string }).id);
     const attachment = await prisma.issueAttachment.findUnique({ where: { id }, include: { issue: { select: { authorId: true } } } });
     if (!attachment) throw new ApiError(404, "ATTACHMENT_NOT_FOUND", "Attachment not found");
-    if (request.currentUser.role !== "ADMIN" && request.currentUser.id !== attachment.uploaderId && request.currentUser.id !== attachment.issue.authorId) {
+    if (!isAdmin(request.currentUser) && request.currentUser.id !== attachment.uploaderId && request.currentUser.id !== attachment.issue.authorId) {
       throw new ApiError(403, "FORBIDDEN", "You do not have permission to delete this attachment");
     }
     await prisma.$transaction([

@@ -203,6 +203,25 @@ describe.sequential("IssueFlow API", () => {
     userACookie = await login("alice"); userBCookie = await login("bob");
   });
 
+  it("enforces multi-role permissions and role-specific issue owners", async () => {
+    const users = await app.inject({ method: "GET", url: "/api/users", headers: { cookie: adminCookie } });
+    expect(json<{ items: Array<{ username: string; roles: string[] }> }>(users).items.find(({ username }) => username === "alice")?.roles).toEqual(["DEVELOPMENT"]);
+
+    const created = await app.inject({ method: "POST", url: "/api/admin/users", headers: { cookie: adminCookie }, payload: { username: "product-manager", password: "manager-password", displayName: "Product Manager" } });
+    const managerId = json<{ user: { id: number } }>(created).user.id;
+    const changed = await app.inject({ method: "PUT", url: `/api/admin/users/${managerId}/roles`, headers: { cookie: adminCookie }, payload: { roles: ["MANAGEMENT", "PRODUCT"] } });
+    expect(json<{ user: { roles: string[] } }>(changed).user.roles.sort()).toEqual(["MANAGEMENT", "PRODUCT"]);
+    const login = await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "product-manager", password: "manager-password" } });
+    const managerCookie = cookieFrom(login.headers);
+
+    expect((await app.inject({ method: "GET", url: "/api/admin/stats", headers: { cookie: managerCookie } })).statusCode).toBe(200);
+    expect((await app.inject({ method: "PUT", url: `/api/admin/users/${userBId}/roles`, headers: { cookie: managerCookie }, payload: { roles: ["PRODUCT"] } })).statusCode).toBe(403);
+    const issue = await app.inject({ method: "POST", url: "/api/issues", headers: { cookie: managerCookie }, payload: { title: "Product request", productOwnerIds: [managerId], developerOwnerIds: [userBId] } });
+    expect(issue.statusCode).toBe(201);
+    expect(json<{ isProductIssue: boolean; assignees: Array<{ ownerType: string; userId: number }> }>(issue)).toMatchObject({ isProductIssue: true, assignees: expect.arrayContaining([expect.objectContaining({ ownerType: "PRODUCT", userId: managerId }), expect.objectContaining({ ownerType: "DEVELOPMENT", userId: userBId })]) });
+    expect((await app.inject({ method: "POST", url: "/api/issues", headers: { cookie: managerCookie }, payload: { title: "Invalid owner", productOwnerIds: [userBId] } })).statusCode).toBe(400);
+  });
+
   it("gives API tokens the same permissions as their normal user account", async () => {
     const created = await app.inject({ method: "POST", url: "/api/auth/api-tokens", headers: { cookie: userACookie }, payload: { name: "Alice script", expiresInDays: null } });
     expect(created.statusCode).toBe(201);

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import { ApiError } from "./errors";
+import { isAdmin } from "./utils";
 
 export const COOKIE_NAME = "issueflow_session";
 export const API_TOKEN_PREFIX = "ift_";
@@ -39,7 +40,7 @@ export function installAuth(app: FastifyInstance, prisma: PrismaClient) {
       const match = authorization.match(/^Bearer\s+(\S+)$/i);
       if (!match?.[1]) throw new ApiError(401, "API_TOKEN_INVALID", "API token is invalid");
       const now = new Date();
-      const apiToken = await prisma.apiToken.findUnique({ where: { tokenHash: hashCredential(match[1]) }, include: { user: true } });
+      const apiToken = await prisma.apiToken.findUnique({ where: { tokenHash: hashCredential(match[1]) }, include: { user: { include: { businessRoles: true } } } });
       if (!apiToken) throw new ApiError(401, "API_TOKEN_INVALID", "API token is invalid");
       if (apiToken.expiresAt && apiToken.expiresAt <= now) {
         await prisma.apiToken.deleteMany({ where: { id: apiToken.id } });
@@ -54,7 +55,7 @@ export function installAuth(app: FastifyInstance, prisma: PrismaClient) {
     }
     const token = request.cookies[COOKIE_NAME];
     if (!token) throw new ApiError(401, "UNAUTHENTICATED", "Authentication required");
-    const session = await prisma.session.findUnique({ where: { tokenHash: hashCredential(token) }, include: { user: true } });
+    const session = await prisma.session.findUnique({ where: { tokenHash: hashCredential(token) }, include: { user: { include: { businessRoles: true } } } });
     if (!session || session.expiresAt <= new Date() || !session.user.active) {
       if (session) await prisma.session.deleteMany({ where: { id: session.id } });
       throw new ApiError(401, "SESSION_EXPIRED", "Session is invalid or expired");
@@ -63,7 +64,7 @@ export function installAuth(app: FastifyInstance, prisma: PrismaClient) {
   });
   app.decorate("requireAdmin", async (request, reply) => {
     await app.authenticate(request, reply);
-    if (request.currentUser.role !== "ADMIN") throw new ApiError(403, "FORBIDDEN", "Administrator access required");
+    if (!isAdmin(request.currentUser)) throw new ApiError(403, "FORBIDDEN", "Administrator access required");
   });
 }
 

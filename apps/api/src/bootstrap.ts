@@ -11,7 +11,7 @@ export async function ensureBootstrapData(prisma: PrismaClient) {
   const password = process.env.ADMIN_PASSWORD || "change-me-now";
   const passwordHash = await bcrypt.hash(password, 12);
   try {
-    return await prisma.user.create({ data: { username, passwordHash, displayName: process.env.ADMIN_DISPLAY_NAME?.trim() || "Platform Admin", role: "ADMIN" } });
+    return await prisma.user.create({ data: { username, passwordHash, displayName: process.env.ADMIN_DISPLAY_NAME?.trim() || "Platform Admin", role: "ADMIN", businessRoles: { create: { role: "DEVELOPMENT" } } } });
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "P2002") {
       const concurrentlyCreated = await prisma.user.findFirst({ where: { role: "ADMIN" } });
