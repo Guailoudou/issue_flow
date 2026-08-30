@@ -243,11 +243,15 @@ describe.sequential("IssueFlow API", () => {
   it("creates an assigned issue with timeline, subscription and notification", async () => {
     const label = await app.inject({ method: "POST", url: "/api/admin/labels", headers: { cookie: adminCookie }, payload: { name: "bug", description: "Bug", color: "d73a4a" } });
     const labelId = json<{ id: number }>(label).id;
-    const response = await app.inject({ method: "POST", url: "/api/issues", headers: { cookie: userACookie }, payload: { title: "Broken flow", body: "Please fix", assigneeIds: [userBId], labelIds: [labelId] } });
+    const urgentLabel = await app.inject({ method: "POST", url: "/api/admin/labels", headers: { cookie: adminCookie }, payload: { name: "urgent", description: "Urgent", color: "b60205" } });
+    const urgentLabelId = json<{ id: number }>(urgentLabel).id;
+    const response = await app.inject({ method: "POST", url: "/api/issues", headers: { cookie: userACookie }, payload: { title: "Broken flow", body: "Please fix", assigneeIds: [userBId], labelIds: [labelId, urgentLabelId] } });
     expect(response.statusCode).toBe(201);
     issueId = json<{ id: number }>(response).id;
     expect(await prisma.timelineEvent.count({ where: { issueId, type: "ISSUE_CREATED" } })).toBe(1);
     expect(await prisma.notification.count({ where: { issueId, userId: userBId, readAt: null } })).toBe(1);
+    expect(json<{ pagination: { total: number } }>(await app.inject({ method: "GET", url: `/api/issues?labelIds=${labelId},${urgentLabelId}`, headers: { cookie: userACookie } })).pagination.total).toBe(1);
+    expect(json<{ items: Array<{ id: number; issueCount: number }> }>(await app.inject({ method: "GET", url: "/api/labels", headers: { cookie: userACookie } })).items.find(({ id }) => id === labelId)?.issueCount).toBe(1);
   });
 
   it("groups awaiting acceptance into the open homepage filter and returns all states without a filter", async () => {

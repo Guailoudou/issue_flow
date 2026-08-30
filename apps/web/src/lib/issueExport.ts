@@ -13,7 +13,7 @@ export function issueExportPath(filters: Filters, range: IssueExportRange) {
     q: filters.q,
     authorId: filters.author,
     assigneeId: filters.assignee,
-    labelId: filters.label,
+    labelIds: filters.label,
     milestoneId: filters.milestone,
     sort: sort === 'created' ? 'createdAt' : 'updatedAt',
     order,

@@ -66,7 +66,7 @@ export async function adminRoutes(app: FastifyInstance, prisma: PrismaClient) {
     return { ok: true };
   });
 
-  app.get("/labels", { preHandler: app.authenticate }, async () => ({ items: await prisma.label.findMany({ orderBy: { name: "asc" } }) }));
+  app.get("/labels", { preHandler: app.authenticate }, async () => ({ items: (await prisma.label.findMany({ orderBy: { name: "asc" }, include: { _count: { select: { issues: true } } } })).map(({ _count, ...label }) => ({ ...label, issueCount: _count.issues })) }));
   app.post("/admin/labels", { preHandler: app.requireAdmin }, async (request, reply) => { reply.status(201); return prisma.label.create({ data: labelSchema.parse(request.body) }); });
   app.put("/admin/labels/:id", { preHandler: app.requireAdmin }, async (request) => prisma.label.update({ where: { id: parseId((request.params as { id: string }).id) }, data: labelSchema.parse(request.body) }));
   app.delete("/admin/labels/:id", { preHandler: app.requireAdmin }, async (request) => { await prisma.label.delete({ where: { id: parseId((request.params as { id: string }).id) } }); return { ok: true }; });

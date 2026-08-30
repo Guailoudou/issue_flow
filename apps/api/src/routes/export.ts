@@ -15,7 +15,7 @@ function issueWhere(query: ReturnType<typeof issueExportQuerySchema.parse>): Pri
   const commonFilters: Prisma.IssueWhereInput = {
     ...(query.authorId ? { authorId: query.authorId } : {}),
     ...(query.assigneeId ? { assignees: { some: { userId: query.assigneeId } } } : {}),
-    ...(query.labelId ? { labels: { some: { labelId: query.labelId } } } : {}),
+    ...(query.labelIds?.length ? { AND: query.labelIds.map((labelId) => ({ labels: { some: { labelId } } })) } : query.labelId ? { labels: { some: { labelId: query.labelId } } } : {}),
     ...(query.milestoneId ? { milestoneId: query.milestoneId } : {}),
     ...(query.q ? { OR: [{ title: { contains: query.q } }, { body: { contains: query.q } }] } : {}),
   };

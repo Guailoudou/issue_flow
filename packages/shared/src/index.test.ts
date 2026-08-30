@@ -10,6 +10,7 @@ describe("shared API schemas", () => {
   it("coerces pagination query values", () => {
     expect(issueQuerySchema.parse({ page: "2", pageSize: "25" })).toMatchObject({ page: 2, pageSize: 25 });
     expect(issueQuerySchema.parse({ state: "AWAITING_ACCEPTANCE" }).state).toBe("AWAITING_ACCEPTANCE");
+    expect(issueQuerySchema.parse({ labelIds: "2,3,2" }).labelIds).toEqual([2, 3]);
   });
 
   it("validates invite registration with the same user fields", () => {

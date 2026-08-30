@@ -1,5 +1,6 @@
 import { Bell, BellOff, CalendarClock, Pencil, Tag, Users } from 'lucide-react';
 import type { Issue } from '../../lib/types';
+import { Link } from 'react-router-dom';
 import { formatDate } from '../../lib/format';
 import { Avatar } from '../atoms/Avatar';
 import { Badge } from '../atoms/Badge';
@@ -27,7 +28,7 @@ export function IssueSidebar({
       </section>
       <section className="p-4">
         <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Tag className="size-4" aria-hidden="true" />标签</h2>
-        {issue.labels.length ? <div className="flex flex-wrap gap-1.5">{issue.labels.map((label) => <Badge key={label.id} color={label.color}>{label.name}</Badge>)}</div> : <p className="text-sm text-slate-500">暂无标签</p>}
+        {issue.labels.length ? <div className="flex flex-wrap gap-1.5">{issue.labels.map((label) => <Link key={label.id} to={`/issues?label=${label.id}`} aria-label={`筛选标签 ${label.name}`} title={label.description}><Badge color={label.color} className="transition-opacity hover:opacity-75">{label.name}</Badge></Link>)}</div> : <p className="text-sm text-slate-500">暂无标签</p>}
       </section>
       <section className="p-4">
         <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold"><CalendarClock className="size-4" aria-hidden="true" />里程碑</h2>

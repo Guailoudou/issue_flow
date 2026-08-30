@@ -78,6 +78,7 @@ export const issueQuerySchema = z.object({
   authorId: idSchema.optional(),
   assigneeId: idSchema.optional(),
   labelId: idSchema.optional(),
+  labelIds: z.string().trim().regex(/^\d+(,\d+)*$/).transform((value) => [...new Set(value.split(",").map(Number))]).refine((value) => value.length <= 30 && value.every((id) => Number.isSafeInteger(id) && id > 0)).optional(),
   milestoneId: idSchema.optional(),
   q: z.string().trim().max(200).optional(),
   sort: z.enum(SORT_FIELDS).default("updatedAt"),

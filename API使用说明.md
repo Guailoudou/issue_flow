@@ -136,6 +136,7 @@ curl -sS "$ISSUEFLOW_API_BASE/issues?page=1&pageSize=20&sort=updatedAt&order=des
 | `authorId` | 按创建人筛选。 |
 | `assigneeId` | 按负责人筛选。 |
 | `labelId` | 按标签筛选。 |
+| `labelIds` | 按多个标签筛选，逗号分隔；Issue 必须同时包含这些标签。 |
 | `milestoneId` | 按里程碑筛选。 |
 | `sort` | `createdAt` 或 `updatedAt`。 |
 | `order` | `asc` 或 `desc`。 |

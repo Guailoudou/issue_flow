@@ -5,7 +5,7 @@ export type MilestoneStatus = 'OPEN' | 'CLOSED';
 
 export type EntityId = number;
 export interface User { id: EntityId; username: string; displayName: string; email?: string; role: Role; roles?: BusinessRole[]; active: boolean; avatarUrl?: string; createdAt?: string; updatedAt?: string }
-export interface Label { id: EntityId; name: string; description?: string; color: string }
+export interface Label { id: EntityId; name: string; description?: string; color: string; issueCount?: number }
 export interface Milestone { id: EntityId; title: string; description?: string; dueDate?: string | null; status?: MilestoneStatus; state?: MilestoneStatus; openIssues?: number; closedIssues?: number }
 export interface Comment { id: EntityId; body: string; author: User; createdAt: string; updatedAt?: string; deletedAt?: string | null }
 export interface TimelineEvent { id: EntityId; type: string; actor: User; createdAt: string; metadata?: Record<string, unknown>; data?: Record<string, unknown>; comment?: Comment }

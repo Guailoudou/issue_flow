@@ -37,7 +37,7 @@ export async function issueRoutes(app: FastifyInstance, prisma: PrismaClient) {
     const where: Prisma.IssueWhereInput = {
       ...(query.state ? { state: query.state === "OPEN" ? { in: ["OPEN", "AWAITING_ACCEPTANCE"] } : query.state } : {}), ...(query.authorId ? { authorId: query.authorId } : {}),
       ...(query.assigneeId ? { assignees: { some: { userId: query.assigneeId } } } : {}),
-      ...(query.labelId ? { labels: { some: { labelId: query.labelId } } } : {}),
+      ...(query.labelIds?.length ? { AND: query.labelIds.map((labelId) => ({ labels: { some: { labelId } } })) } : query.labelId ? { labels: { some: { labelId: query.labelId } } } : {}),
       ...(query.milestoneId ? { milestoneId: query.milestoneId } : {}),
       ...(query.q ? { OR: [{ title: { contains: query.q } }, { body: { contains: query.q } }] } : {}),
     };
