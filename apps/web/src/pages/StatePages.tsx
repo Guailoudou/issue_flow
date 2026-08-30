@@ -1,0 +1,7 @@
+import { AlertTriangle, Ban, FileQuestion, Home } from 'lucide-react';
+import { isRouteErrorResponse, Link, useRouteError } from 'react-router-dom';
+import { Button } from '../components/atoms/Button';
+function StatePage({ code, title, description, icon: Icon }: { code: string; title: string; description: string; icon: typeof Ban }) { return <main className="flex min-h-[calc(100vh-4rem)] items-center justify-center p-5"><div className="max-w-md text-center"><span className="mx-auto mb-5 flex size-16 items-center justify-center rounded-2xl bg-brand-100 text-brand-800"><Icon className="size-8" /></span><p className="text-sm font-semibold text-brand-700">{code}</p><h1 className="mt-2 text-3xl font-bold">{title}</h1><p className="mt-3 text-slate-600">{description}</p><Link className="mt-6 inline-block" to="/issues"><Button icon={<Home className="size-4" />}>返回 Issues</Button></Link></div></main>; }
+export function ForbiddenPage() { return <StatePage code="403" title="没有访问权限" description="你的账号无权访问此页面。如需帮助，请联系平台管理员。" icon={Ban} />; }
+export function NotFoundPage() { return <StatePage code="404" title="页面不存在" description="你访问的地址可能已更改，或内容已被移除。" icon={FileQuestion} />; }
+export function RouteErrorPage() { const error = useRouteError(); const message = isRouteErrorResponse(error) ? error.statusText : error instanceof Error ? error.message : '发生了未知错误'; return <StatePage code="错误" title="页面暂时不可用" description={message} icon={AlertTriangle} />; }

@@ -1,0 +1,54 @@
+name: issueflow
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_PORT: "13101"
+      DATABASE_URL: file:/data/issueflow.db
+      UPLOAD_DIR: /data/uploads
+      WEB_ORIGIN: ${ISSUEFLOW_WEB_ORIGIN:-http://localhost:18080}
+      ADMIN_USERNAME: ${ISSUEFLOW_ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ISSUEFLOW_ADMIN_PASSWORD:-change-me-before-deploy}
+      ADMIN_DISPLAY_NAME: ${ISSUEFLOW_ADMIN_DISPLAY_NAME:-IssueFlow Administrator}
+      SESSION_TTL_DAYS: ${ISSUEFLOW_SESSION_TTL_DAYS:-30}
+      COOKIE_SECURE: ${ISSUEFLOW_COOKIE_SECURE:-false}
+      REGISTRATION_INVITE_CODE: ${ISSUEFLOW_REGISTRATION_INVITE_CODE:-}
+      YUNXIAO_ENCRYPTION_KEY: ${ISSUEFLOW_YUNXIAO_ENCRYPTION_KEY:-}
+      YUNXIAO_WEBHOOK_BASE_URL: ${ISSUEFLOW_YUNXIAO_WEBHOOK_BASE_URL:-http://localhost:18080}
+    expose:
+      - "13101"
+    volumes:
+      - issueflow-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://localhost:13101/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-18080}:18080"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:18080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  issueflow-data:

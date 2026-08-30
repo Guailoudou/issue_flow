@@ -1,0 +1,32 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { @apply border-slate-200; }
+  html { @apply bg-brand-50 text-slate-900 antialiased; }
+  body { @apply min-h-screen min-w-[320px] text-base leading-6; }
+  button, [role='button'], a, select { @apply cursor-pointer; }
+  :focus-visible { @apply outline-none ring-2 ring-brand-600 ring-offset-2; }
+  ::selection { @apply bg-brand-200 text-brand-900; }
+}
+
+@layer components {
+  .page-container { @apply mx-auto w-full max-w-7xl px-4 py-5 sm:px-6 lg:px-8; }
+  .surface { @apply rounded-xl border bg-white; }
+  .markdown { @apply break-words text-slate-700; }
+  .markdown h1 { @apply mb-3 mt-5 text-2xl font-semibold text-slate-900; }
+  .markdown h2 { @apply mb-2 mt-4 text-xl font-semibold text-slate-900; }
+  .markdown p { @apply my-3; }
+  .markdown ul { @apply my-3 list-disc pl-6; }
+  .markdown ol { @apply my-3 list-decimal pl-6; }
+  .markdown a { @apply text-brand-700 underline underline-offset-2; }
+  .markdown code { @apply rounded bg-slate-100 px-1 py-0.5 text-sm; }
+  .markdown pre { @apply my-3 overflow-x-auto rounded-lg bg-slate-900 p-4 text-sm text-slate-50; }
+  .markdown blockquote { @apply border-l-4 border-brand-200 pl-4 text-slate-600; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}

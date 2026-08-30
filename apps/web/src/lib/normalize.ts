@@ -1,0 +1,4 @@
+import type { Issue, Label, PageResult, User } from './types';
+type RawIssue = Omit<Issue, 'number' | 'status' | 'assignees' | 'labels' | 'commentsCount'> & { number?: number; state?: Issue['status']; status?: Issue['status']; assignees?: Array<User | { user: User }>; labels?: Array<Label | { label: Label }>; _count?: { comments?: number }; commentsCount?: number };
+export function normalizeIssue(raw: RawIssue): Issue { return { ...raw, number: raw.number ?? raw.id, status: raw.state ?? raw.status ?? 'OPEN', state: raw.state ?? raw.status, assignees: (raw.assignees ?? []).map((item) => 'user' in item ? item.user : item), labels: (raw.labels ?? []).map((item) => 'label' in item ? item.label : item), commentsCount: raw.commentsCount ?? raw._count?.comments ?? 0 }; }
+export function normalizeIssuePage(raw: PageResult<RawIssue>): PageResult<Issue> { return { ...raw, items: raw.items.map(normalizeIssue) }; }

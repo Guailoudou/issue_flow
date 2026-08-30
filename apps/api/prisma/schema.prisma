@@ -1,0 +1,256 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            Int               @id @default(autoincrement())
+  username      String            @unique
+  passwordHash  String
+  displayName   String
+  email         String?
+  role          String            @default("USER")
+  active        Boolean           @default(true)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  sessions      Session[]
+  apiTokens     ApiToken[]
+  issues        Issue[]           @relation("IssueAuthor")
+  assignments   IssueAssignee[]
+  comments      Comment[]
+  events        TimelineEvent[]
+  subscriptions Subscription[]
+  notifications Notification[]
+  attachments   IssueAttachment[] @relation("AttachmentUploader")
+
+  @@index([active])
+}
+
+model Session {
+  id        Int      @id @default(autoincrement())
+  tokenHash String   @unique
+  userId    Int
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model ApiToken {
+  id          Int       @id @default(autoincrement())
+  userId      Int
+  name        String
+  tokenHash   String    @unique
+  tokenPrefix String
+  expiresAt   DateTime?
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+}
+
+model PlatformSetting {
+  id                   Int      @id @default(1)
+  name                 String   @default("IssueFlow")
+  description          String   @default("")
+  logoUrl              String   @default("")
+  defaultPageSize      Int      @default(20)
+  allowUserCreateIssue Boolean  @default(true)
+  updatedAt            DateTime @updatedAt
+}
+
+model Issue {
+  id             Int               @id @default(autoincrement())
+  title          String
+  body           String            @default("")
+  state          String            @default("OPEN")
+  authorId       Int
+  milestoneId    Int?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  closedAt       DateTime?
+  author         User              @relation("IssueAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  milestone      Milestone?        @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+  assignees      IssueAssignee[]
+  labels         IssueLabel[]
+  comments       Comment[]
+  timeline       TimelineEvent[]
+  subscriptions  Subscription[]
+  notifications  Notification[]
+  codeReferences CodeReference[]
+  attachments    IssueAttachment[]
+
+  @@index([state, updatedAt])
+  @@index([authorId])
+  @@index([milestoneId])
+}
+
+model IssueAttachment {
+  id          Int      @id @default(autoincrement())
+  issueId     Int
+  uploaderId  Int
+  fileName    String
+  storageName String   @unique
+  mimeType    String
+  size        Int
+  createdAt   DateTime @default(now())
+  issue       Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  uploader    User     @relation("AttachmentUploader", fields: [uploaderId], references: [id], onDelete: Restrict)
+
+  @@index([issueId, createdAt])
+  @@index([uploaderId])
+}
+
+model YunxiaoIntegration {
+  id                     Int       @id @default(1)
+  enabled                Boolean   @default(false)
+  edition                String    @default("CENTRAL")
+  baseUrl                String    @default("")
+  organizationId         String    @default("")
+  repositoryId           String    @default("")
+  repositoryName         String    @default("")
+  repositoryWebUrl       String    @default("")
+  tokenEncrypted         String?
+  webhookSecretEncrypted String?
+  lastTestedAt           DateTime?
+  lastTestStatus         String?
+  lastTestMessage        String?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+}
+
+model CodeReference {
+  id           Int      @id @default(autoincrement())
+  issueId      Int
+  type         String
+  externalId   String
+  title        String
+  url          String   @default("")
+  status       String?
+  sourceBranch String?
+  targetBranch String?
+  authorName   String?
+  commitSha    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  issue        Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@unique([issueId, type, externalId])
+  @@index([issueId, updatedAt])
+}
+
+model WebhookDelivery {
+  id          Int       @id @default(autoincrement())
+  deliveryKey String    @unique
+  eventType   String
+  status      String    @default("PROCESSING")
+  summary     String    @default("{}")
+  error       String?
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
+  updatedAt   DateTime  @updatedAt
+
+  @@index([status, createdAt])
+}
+
+model IssueAssignee {
+  issueId Int
+  userId  Int
+  issue   Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  user    User  @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@id([issueId, userId])
+  @@index([userId])
+}
+
+model Label {
+  id          Int          @id @default(autoincrement())
+  name        String       @unique
+  description String       @default("")
+  color       String
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  issues      IssueLabel[]
+}
+
+model IssueLabel {
+  issueId Int
+  labelId Int
+  issue   Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  label   Label @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@id([issueId, labelId])
+  @@index([labelId])
+}
+
+model Milestone {
+  id          Int       @id @default(autoincrement())
+  title       String    @unique
+  description String    @default("")
+  dueDate     DateTime?
+  state       String    @default("OPEN")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  issues      Issue[]
+}
+
+model Comment {
+  id        Int       @id @default(autoincrement())
+  body      String
+  issueId   Int
+  authorId  Int
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  issue     Issue     @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  author    User      @relation(fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([issueId, createdAt])
+  @@index([authorId])
+}
+
+model TimelineEvent {
+  id        Int      @id @default(autoincrement())
+  issueId   Int
+  actorId   Int
+  type      String
+  data      String   @default("{}")
+  createdAt DateTime @default(now())
+  issue     Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  actor     User     @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([issueId, createdAt])
+}
+
+model Subscription {
+  issueId   Int
+  userId    Int
+  createdAt DateTime @default(now())
+  issue     Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([issueId, userId])
+  @@index([userId])
+}
+
+model Notification {
+  id        Int       @id @default(autoincrement())
+  userId    Int
+  issueId   Int?
+  type      String
+  message   String
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  issue     Issue?    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+}
