@@ -73,6 +73,17 @@ const multipartImage = (contents: Buffer, mimeType: string, fileName = "image.pn
     ]),
   };
 };
+const multipartBackup = (contents: Buffer) => {
+  const boundary = `issueflow-backup-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return {
+    headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+    payload: Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="backup"; filename="backup.json"\r\nContent-Type: application/json\r\n\r\n`),
+      contents,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]),
+  };
+};
 
 beforeAll(async () => {
   process.env.ADMIN_USERNAME = "admin";
@@ -450,6 +461,7 @@ describe.sequential("IssueFlow API", () => {
     const countRejected = await app.inject({ method: "POST", url: `/api/issues/${cappedIssue.id}/attachments`, headers: { ...overCount.headers, cookie: userACookie }, payload: overCount.payload });
     expect(countRejected.statusCode).toBe(409);
     expect(json<{ error: { code: string } }>(countRejected).error.code).toBe("ATTACHMENT_LIMIT_REACHED");
+    await prisma.issue.delete({ where: { id: cappedIssue.id } });
   });
 
   it("stores new attachments through S3 without changing the attachment API", async () => {
@@ -760,5 +772,32 @@ describe.sequential("IssueFlow API", () => {
       await appWithoutKey.close();
       if (previous !== undefined) process.env.YUNXIAO_ENCRYPTION_KEY = previous;
     }
+  });
+
+  it("exports every model and attachment, then overwrites all platform data on import", async () => {
+    expect((await app.inject({ method: "GET", url: "/api/admin/backup/export", headers: { cookie: userACookie } })).statusCode).toBe(403);
+    const attachment = await prisma.issueAttachment.findFirstOrThrow();
+    const originalContent = await app.inject({ method: "GET", url: `/api/attachments/${attachment.id}/content`, headers: { cookie: adminCookie } });
+    const issueCount = await prisma.issue.count();
+    const exported = await app.inject({ method: "GET", url: "/api/admin/backup/export", headers: { cookie: adminCookie } });
+    expect(exported.statusCode).toBe(200);
+    expect(exported.headers["content-type"]).toContain("application/json");
+    expect(exported.headers["cache-control"]).toBe("private, no-store");
+    const backup = JSON.parse(exported.body) as { format: string; data: Record<string, unknown[]>; attachmentContents: unknown[] };
+    expect(backup.format).toBe("issueflow-backup");
+    expect(Object.keys(backup.data)).toHaveLength(21);
+    expect(backup.attachmentContents).toHaveLength(await prisma.issueAttachment.count());
+
+    const marker = await prisma.issue.create({ data: { title: "must disappear after restore", authorId: userAId } });
+    const body = multipartBackup(exported.rawPayload);
+    expect((await app.inject({ method: "POST", url: "/api/admin/backup/import", headers: { ...body.headers, cookie: adminCookie }, payload: body.payload })).statusCode).toBe(400);
+    const imported = await app.inject({ method: "POST", url: "/api/admin/backup/import?confirm=OVERWRITE", headers: { ...body.headers, cookie: adminCookie }, payload: body.payload });
+    expect(imported.statusCode).toBe(200);
+    expect(await prisma.issue.findUnique({ where: { id: marker.id } })).toBeNull();
+    expect(await prisma.issue.count()).toBe(issueCount);
+    const restoredAttachment = await prisma.issueAttachment.findUniqueOrThrow({ where: { id: attachment.id } });
+    expect(restoredAttachment).toMatchObject({ storageType: "LOCAL", size: attachment.size, fileName: attachment.fileName });
+    const restoredContent = await app.inject({ method: "GET", url: `/api/attachments/${attachment.id}/content`, headers: { cookie: adminCookie } });
+    expect(restoredContent.rawPayload.equals(originalContent.rawPayload)).toBe(true);
   });
 });

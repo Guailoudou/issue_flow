@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
-import type { PrismaClient } from "@prisma/client";
+import type { OssSetting, PrismaClient } from "@prisma/client";
 import { ApiError } from "../errors";
 import { asOssError, createOssClient, type OssOptions } from "../storage/oss";
 import { asWebDavError, createWebDavClient, type WebDavOptions } from "../storage/webdav";
@@ -37,6 +37,14 @@ export async function readAttachmentBuffer(prisma: PrismaClient, uploadDir: stri
     if (!result.content) throw new ApiError(404, "ATTACHMENT_CONTENT_NOT_FOUND", "Attachment content not found");
     return Buffer.from(result.content);
   } catch (error) { throw attachment.storageType === "WEBDAV" ? asWebDavError(error, "download") : asOssError(error, "download"); }
+}
+
+export async function deleteAttachmentContent(prisma: PrismaClient, uploadDir: string, attachment: { storageType: string; storageName: string }, options: AttachmentRouteOptions = {}, knownSetting?: OssSetting | null) {
+  if (attachment.storageType === "LOCAL") return unlink(resolveAttachmentPath(uploadDir, attachment.storageName));
+  const setting = knownSetting === undefined ? await prisma.ossSetting.findUnique({ where: { id: 1 } }) : knownSetting;
+  if (!setting) return;
+  if (attachment.storageType === "WEBDAV") return createWebDavClient(setting, options.webdav).delete(attachment.storageName);
+  return createOssClient(setting, options.oss).delete(attachment.storageName);
 }
 
 function normalizedMimeType(value: string | undefined) {
@@ -190,13 +198,7 @@ export async function attachmentRoutes(app: FastifyInstance, prisma: PrismaClien
       prisma.issueAttachment.delete({ where: { id } }),
       prisma.timelineEvent.create({ data: { issueId: attachment.issueId, actorId: request.currentUser.id, type: "ATTACHMENT_REMOVED", data: timelineData({ attachmentId: id, fileName: attachment.fileName }) } }),
     ]);
-    if (attachment.storageType === "OSS") {
-      const setting = await prisma.ossSetting.findUnique({ where: { id: 1 } });
-      if (setting) try { await createOssClient(setting, options.oss).delete(attachment.storageName); } catch { /* Database deletion remains authoritative, matching local storage cleanup. */ }
-    } else if (attachment.storageType === "WEBDAV") {
-      const setting = await prisma.ossSetting.findUnique({ where: { id: 1 } });
-      if (setting) try { await createWebDavClient(setting, options.webdav).delete(attachment.storageName); } catch { /* Database deletion remains authoritative. */ }
-    } else await unlink(resolveAttachmentPath(uploadDir, attachment.storageName)).catch(() => undefined);
+    await deleteAttachmentContent(prisma, uploadDir, attachment, options).catch(() => undefined);
     return reply.status(204).send();
   });
 }

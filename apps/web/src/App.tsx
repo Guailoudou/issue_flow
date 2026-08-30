@@ -27,6 +27,7 @@ const AdminSettingsPage = lazyPage(() => import('./pages/admin/AdminSettingsPage
 const AdminUsersPage = lazyPage(() => import('./pages/admin/AdminUsersPage'), 'AdminUsersPage');
 const AdminYunxiaoPage = lazyPage(() => import('./pages/admin/AdminYunxiaoPage'), 'AdminYunxiaoPage');
 const AdminOssPage = lazyPage(() => import('./pages/admin/AdminOssPage'), 'AdminOssPage');
+const AdminBackupPage = lazyPage(() => import('./pages/admin/AdminBackupPage'), 'AdminBackupPage');
 
 function RouteLoading() {
   return <div className="flex min-h-48 items-center justify-center text-sm text-slate-600" role="status">正在加载页面…</div>;
@@ -57,6 +58,7 @@ export function App() {
                 <Route path="milestones" element={<AdminMilestonesPage />} />
                 <Route path="yunxiao" element={<AdminYunxiaoPage />} />
                 <Route path="oss" element={<AdminOssPage />} />
+                <Route path="backup" element={<AdminBackupPage />} />
                 <Route path="settings" element={<AdminSettingsPage />} />
               </Route>
             </Route>
