@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Download, File, Trash2 } from 'lucide-react';
+import { ChevronDown, Download, File, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '../../lib/api';
 import { formatDate } from '../../lib/format';
@@ -14,6 +14,7 @@ const formatSize = (size: number) => size >= 1024 * 1024 ? `${(size / 1024 / 102
 
 export function IssueAttachments({ issueId }: { issueId: number }) {
   const client = useQueryClient();
+  const [expanded, setExpanded] = useState(false);
   const [selected, setSelected] = useState<IssueAttachment | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const query = useQuery({ queryKey: ['issue-attachments', issueId], queryFn: () => api<{ attachments: IssueAttachment[] }>(`/issues/${issueId}/attachments`) });
@@ -23,8 +24,8 @@ export function IssueAttachments({ issueId }: { issueId: number }) {
   const attachments = query.data.attachments;
   if (!attachments.length) return null;
   return <section className="surface overflow-hidden" aria-labelledby="issue-attachments-title">
-    <header className="border-b bg-slate-50 px-4 py-3"><h2 id="issue-attachments-title" className="font-semibold">附件</h2><p className="mt-0.5 text-sm text-slate-500">查看或下载已上传的相关文件</p></header>
-    <div className="p-4">
+    <header className={`${expanded ? 'border-b' : ''} bg-slate-50`}><h2 id="issue-attachments-title"><button type="button" className="flex min-h-11 w-full cursor-pointer items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-100" aria-expanded={expanded} aria-controls="issue-attachments-content" onClick={() => setExpanded((value) => !value)}><span><span className="block font-semibold">附件</span><span className="mt-0.5 block text-sm font-normal text-slate-500" role="status" aria-atomic="true">共有 {attachments.length} 个附件</span></span><ChevronDown className={`size-5 shrink-0 text-slate-500 transition-transform ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" /></button></h2></header>
+    {expanded && <div id="issue-attachments-content" className="p-4">
       {feedback && <div className="mb-4"><Alert message={feedback} /></div>}
       <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3" aria-label="已上传附件">
         {attachments.map((attachment) => {
@@ -35,7 +36,7 @@ export function IssueAttachments({ issueId }: { issueId: number }) {
           </li>;
         })}
       </ul>
-    </div>
+    </div>}
     <Modal open={!!selected} title={selected?.fileName || '图片预览'} onClose={() => setSelected(null)}>{selected && <div className="space-y-4"><div className="overflow-hidden rounded-lg bg-slate-100"><img src={selected.url} alt={selected.fileName} className="max-h-[70vh] w-full object-contain" /></div><div className="flex justify-end"><a href={selected.url} download={selected.fileName} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-accent-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-accent-700"><Download className="size-4" aria-hidden="true" />下载附件</a></div></div>}</Modal>
   </section>;
 }

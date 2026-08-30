@@ -8,12 +8,17 @@ function renderAttachments() { const client = new QueryClient({ defaultOptions: 
 describe('IssueAttachments', () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it('只展示已有附件，不提供上传入口', async () => {
+  it('默认收起附件并显示数量，展开后展示已有附件', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ attachments: [
       { id: 7, issueId: 1, fileName: '页面.png', mimeType: 'image/png', size: 2048, url: '/api/attachments/7/content', createdAt: '2026-08-29T00:00:00.000Z', uploader: { id: 1, username: 'admin', displayName: '管理员', role: 'ADMIN', active: true }, canDelete: true },
       { id: 8, issueId: 1, fileName: '需求.pdf', mimeType: 'application/pdf', size: 4096, url: '/api/attachments/8/content', createdAt: '2026-08-29T00:00:00.000Z', uploader: { id: 1, username: 'admin', displayName: '管理员', role: 'ADMIN', active: true }, canDelete: true },
     ] }), { headers: { 'Content-Type': 'application/json' } })));
     const view = renderAttachments();
+    const toggle = await screen.findByRole('button', { name: /附件.*共有 2 个附件/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('img', { name: '页面.png' })).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(await screen.findByRole('img', { name: '页面.png' })).toHaveAttribute('loading', 'lazy');
     expect(screen.getByRole('link', { name: '下载 页面.png' })).toHaveAttribute('href', '/api/attachments/7/content');
     expect(screen.getByRole('link', { name: '下载 需求.pdf' })).toHaveAttribute('href', '/api/attachments/8/content');
