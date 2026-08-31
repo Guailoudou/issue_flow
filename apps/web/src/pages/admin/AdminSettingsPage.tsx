@@ -14,10 +14,10 @@ import { api, jsonBody } from '../../lib/api';
 
 type SettingsForm = {
   name: string; description: string; logoUrl: string; defaultPageSize: number; allowUserCreateIssue: boolean;
-  aiEnabled: boolean; aiUrl: string; aiModel: string; aiApiKey: string; clearAiApiKey: boolean; aiMaxLabels: number;
+  aiEnabled: boolean; aiUrl: string; aiModel: string; aiApiKey: string; clearAiApiKey: boolean; aiMaxLabels: number; aiTimeoutSeconds: number; aiStructuredOutput: boolean; aiDisableThinking: boolean;
 };
 type SettingsResponse = Omit<SettingsForm, 'aiApiKey' | 'clearAiApiKey'> & { hasAiApiKey: boolean };
-const empty: SettingsForm = { name: 'IssueFlow', description: '', logoUrl: '', defaultPageSize: 20, allowUserCreateIssue: true, aiEnabled: false, aiUrl: '', aiModel: '', aiApiKey: '', clearAiApiKey: false, aiMaxLabels: 3 };
+const empty: SettingsForm = { name: 'IssueFlow', description: '', logoUrl: '', defaultPageSize: 20, allowUserCreateIssue: true, aiEnabled: false, aiUrl: '', aiModel: '', aiApiKey: '', clearAiApiKey: false, aiMaxLabels: 3, aiTimeoutSeconds: 60, aiStructuredOutput: false, aiDisableThinking: false };
 
 export function AdminSettingsPage() {
   const client = useQueryClient();
@@ -34,7 +34,7 @@ export function AdminSettingsPage() {
   });
   if (query.isPending) return <Spinner label="正在加载平台设置" />;
   if (query.isError) return <div className="surface"><ErrorPanel message={query.error.message} onRetry={() => void query.refetch()} /></div>;
-  const valid = !!form.name.trim() && form.defaultPageSize >= 5 && form.defaultPageSize <= 100 && form.aiMaxLabels >= 1 && form.aiMaxLabels <= 5 && (!form.aiEnabled || (!!form.aiUrl.trim() && !!form.aiModel.trim()));
+  const valid = !!form.name.trim() && form.defaultPageSize >= 5 && form.defaultPageSize <= 100 && form.aiMaxLabels >= 1 && form.aiMaxLabels <= 5 && form.aiTimeoutSeconds >= 5 && form.aiTimeoutSeconds <= 300 && (!form.aiEnabled || (!!form.aiUrl.trim() && !!form.aiModel.trim()));
   return <>
     <PageHeader title="平台设置" description="配置平台品牌、创建权限和 AI 自动标签" />
     <form className="surface max-w-3xl space-y-6 p-5" onSubmit={(event) => { event.preventDefault(); save.mutate(); }}>
@@ -55,7 +55,10 @@ export function AdminSettingsPage() {
           <FormField label="模型名称" htmlFor="ai-model" required={form.aiEnabled}><Input id="ai-model" placeholder="例如模型 ID" maxLength={200} value={form.aiModel} onChange={(event) => setForm({ ...form, aiModel: event.target.value })} /></FormField>
           <FormField label="API Key" htmlFor="ai-api-key" hint={query.data.hasAiApiKey ? '已加密保存；留空将保留原密钥' : '无鉴权接口可留空'}><Input id="ai-api-key" type="password" autoComplete="new-password" disabled={form.clearAiApiKey} value={form.aiApiKey} onChange={(event) => setForm({ ...form, aiApiKey: event.target.value, clearAiApiKey: false })} /></FormField>
           <FormField label="最多标签数" htmlFor="ai-max-labels" hint="每个 Issue 自动添加 1–5 个标签"><Input id="ai-max-labels" type="number" min={1} max={5} value={form.aiMaxLabels} onChange={(event) => setForm({ ...form, aiMaxLabels: Number(event.target.value) })} /></FormField>
+          <FormField label="请求超时（秒）" htmlFor="ai-timeout" hint="可设置 5–300 秒；后台执行，不影响 Issue 创建速度"><Input id="ai-timeout" type="number" min={5} max={300} value={form.aiTimeoutSeconds} onChange={(event) => setForm({ ...form, aiTimeoutSeconds: Number(event.target.value) })} /></FormField>
         </div>
+        <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border p-3 transition-colors hover:bg-slate-50"><Checkbox checked={form.aiStructuredOutput} onChange={(event) => setForm({ ...form, aiStructuredOutput: event.target.checked })} /><span><span className="block text-sm font-semibold">启用 JSON Schema 结构化输出</span><span className="block text-xs text-slate-500">仅在当前模型支持结构化输出时开启；关闭后不发送 response_format 参数。</span></span></label>
+        <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border p-3 transition-colors hover:bg-slate-50"><Checkbox checked={form.aiDisableThinking} onChange={(event) => setForm({ ...form, aiDisableThinking: event.target.checked })} /><span><span className="block text-sm font-semibold">关闭深度思考</span><span className="block text-xs text-slate-500">开启后发送 enable_thinking=false；仅用于支持该参数的模型。</span></span></label>
         {query.data.hasAiApiKey && <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border p-3 transition-colors hover:bg-slate-50"><Checkbox checked={form.clearAiApiKey} onChange={(event) => setForm({ ...form, clearAiApiKey: event.target.checked, aiApiKey: '' })} /><span className="text-sm font-medium">清除已保存的 API Key</span></label>}
       </section>
       <div className="flex justify-end border-t pt-4"><Button type="submit" loading={save.isPending} disabled={!valid} icon={<Save className="size-4" aria-hidden="true" />}>保存设置</Button></div>

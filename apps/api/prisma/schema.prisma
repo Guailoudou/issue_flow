@@ -70,6 +70,9 @@ model PlatformSetting {
   aiModel              String   @default("")
   aiApiKeyEncrypted    String?
   aiMaxLabels          Int      @default(3)
+  aiTimeoutSeconds     Int      @default(60)
+  aiStructuredOutput   Boolean  @default(false)
+  aiDisableThinking    Boolean  @default(false)
   updatedAt            DateTime @updatedAt
 }
 

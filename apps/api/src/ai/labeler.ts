@@ -58,7 +58,7 @@ export async function assignAiLabels(prisma: PrismaClient, issue: Pick<Issue, "i
   const labels = await prisma.label.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true, description: true } });
   if (!labels.length) return [];
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 10_000);
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? setting.aiTimeoutSeconds * 1_000);
   try {
     const apiKey = setting.aiApiKeyEncrypted ? decryptAiApiKey(setting.aiApiKeyEncrypted, options) : "";
     const response = await (options.fetchImpl ?? fetch)(setting.aiUrl, {
@@ -71,7 +71,20 @@ export async function assignAiLabels(prisma: PrismaClient, issue: Pick<Issue, "i
           { role: "system", content: `Choose up to ${setting.aiMaxLabels} relevant labels for the issue. Only use IDs from the supplied label list. Return only a JSON object shaped as {"labelIds":[1,2]}; return an empty array when none apply.` },
           { role: "user", content: JSON.stringify({ title: issue.title, body: issueBodyForAi(issue.body), labels }) },
         ],
-        response_format: { type: "json_object" },
+        ...(setting.aiStructuredOutput ? { response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "issue_labels",
+            strict: true,
+            schema: {
+              type: "object",
+              properties: { labelIds: { type: "array", items: { type: "integer" }, maxItems: setting.aiMaxLabels } },
+              required: ["labelIds"],
+              additionalProperties: false,
+            },
+          },
+        } } : {}),
+        ...(setting.aiDisableThinking ? { enable_thinking: false } : {}),
         stream: false,
       }),
     });

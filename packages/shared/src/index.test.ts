@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { changePasswordSchema, commitActionSchema, createApiTokenSchema, createIssueSchema, issueExportQuerySchema, issueQuerySchema, labelSchema, ossSettingSchema, registerUserSchema, updateProfileSchema, updateUserSchema, yunxiaoIntegrationSchema } from "./index";
+import { adminPlatformSettingSchema, changePasswordSchema, commitActionSchema, createApiTokenSchema, createIssueSchema, issueExportQuerySchema, issueQuerySchema, labelSchema, ossSettingSchema, registerUserSchema, updateProfileSchema, updateUserSchema, yunxiaoIntegrationSchema } from "./index";
 
 describe("shared API schemas", () => {
   it("trims and validates issue titles", () => {
@@ -34,6 +34,13 @@ describe("shared API schemas", () => {
   it("validates the closed issue export range", () => {
     expect(issueExportQuerySchema.safeParse({ closedFrom: "2026-08-01T00:00:00.000Z", closedTo: "2026-08-31T23:59:59.999Z" }).success).toBe(true);
     expect(issueExportQuerySchema.safeParse({ closedFrom: "2026-09-01T00:00:00.000Z", closedTo: "2026-08-31T23:59:59.999Z" }).success).toBe(false);
+  });
+
+  it("defaults and bounds AI request options", () => {
+    const base = { name: "IssueFlow", description: "", logoUrl: "", defaultPageSize: 20, allowUserCreateIssue: true, aiEnabled: false, aiUrl: "", aiModel: "", aiMaxLabels: 3 };
+    expect(adminPlatformSettingSchema.parse(base)).toMatchObject({ aiTimeoutSeconds: 60, aiStructuredOutput: false, aiDisableThinking: false });
+    expect(adminPlatformSettingSchema.safeParse({ ...base, aiTimeoutSeconds: 4 }).success).toBe(false);
+    expect(adminPlatformSettingSchema.safeParse({ ...base, aiTimeoutSeconds: 301 }).success).toBe(false);
   });
 
   it("only accepts six digit label colors", () => {

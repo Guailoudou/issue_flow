@@ -52,6 +52,9 @@ export const adminPlatformSettingSchema = platformSettingSchema.extend({
   aiApiKey: z.string().trim().min(1).max(4000).optional(),
   clearAiApiKey: z.boolean().default(false),
   aiMaxLabels: z.number().int().min(1).max(5),
+  aiTimeoutSeconds: z.number().int().min(5).max(300).default(60),
+  aiStructuredOutput: z.boolean().default(false),
+  aiDisableThinking: z.boolean().default(false),
 }).superRefine((value, context) => {
   if (value.aiEnabled && !value.aiUrl) context.addIssue({ code: "custom", path: ["aiUrl"], message: "AI URL is required when AI labeling is enabled" });
   if (value.aiEnabled && !value.aiModel) context.addIssue({ code: "custom", path: ["aiModel"], message: "AI model is required when AI labeling is enabled" });

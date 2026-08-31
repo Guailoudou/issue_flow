@@ -344,11 +344,11 @@ describe.sequential("IssueFlow API", () => {
     aiFetchCalls.length = 0;
     const saved = await app.inject({ method: "PUT", url: "/api/admin/settings", headers: { cookie: adminCookie }, payload: {
       name: "IssueFlow", description: "", logoUrl: "", defaultPageSize: 20, allowUserCreateIssue: true,
-      aiEnabled: true, aiUrl: "https://ai.example.com/v1/chat/completions", aiModel: "test-model", aiApiKey: "private-ai-key", clearAiApiKey: false, aiMaxLabels: 2,
+      aiEnabled: true, aiUrl: "https://ai.example.com/v1/chat/completions", aiModel: "test-model", aiApiKey: "private-ai-key", clearAiApiKey: false, aiMaxLabels: 2, aiTimeoutSeconds: 45, aiStructuredOutput: true, aiDisableThinking: true,
     } });
     expect(saved.statusCode).toBe(200);
     expect(saved.body).not.toContain("private-ai-key");
-    expect(json<{ hasAiApiKey: boolean }>(saved).hasAiApiKey).toBe(true);
+    expect(json<{ hasAiApiKey: boolean; aiTimeoutSeconds: number; aiStructuredOutput: boolean; aiDisableThinking: boolean }>(saved)).toMatchObject({ hasAiApiKey: true, aiTimeoutSeconds: 45, aiStructuredOutput: true, aiDisableThinking: true });
     expect((await app.inject({ method: "GET", url: "/api/settings" })).body).not.toContain("aiApiKey");
 
     let releaseAiFetch = () => {};
@@ -358,8 +358,8 @@ describe.sequential("IssueFlow API", () => {
     expect(json<{ labels: unknown[] }>(response).labels).toEqual([]);
     await vi.waitFor(() => expect(aiFetchCalls).toHaveLength(1));
     const aiCall = aiFetchCalls[0]!;
-    const aiRequest = JSON.parse(String(aiCall.init?.body)) as { model: string; response_format: { type: string }; messages: Array<{ role: string; content: string }> };
-    expect(aiRequest).toMatchObject({ model: "test-model", response_format: { type: "json_object" } });
+    const aiRequest = JSON.parse(String(aiCall.init?.body)) as { model: string; enable_thinking: boolean; response_format: { type: string; json_schema: { strict: boolean; schema: { required: string[]; additionalProperties: boolean } } }; messages: Array<{ role: string; content: string }> };
+    expect(aiRequest).toMatchObject({ model: "test-model", enable_thinking: false, response_format: { type: "json_schema", json_schema: { strict: true, schema: { required: ["labelIds"], additionalProperties: false } } } });
     expect(aiCall.init?.headers).toMatchObject({ authorization: "Bearer private-ai-key" });
     const sentContent = aiRequest.messages.find(({ role }) => role === "user")?.content ?? "";
     expect(sentContent).toContain("Visible description");
@@ -371,13 +371,23 @@ describe.sequential("IssueFlow API", () => {
     const createdIssueId = json<{ id: number }>(response).id;
     await vi.waitFor(async () => expect(await prisma.issueLabel.count({ where: { issueId: createdIssueId } })).toBe(1));
 
+    await app.inject({ method: "PUT", url: "/api/admin/settings", headers: { cookie: adminCookie }, payload: {
+      name: "IssueFlow", description: "", logoUrl: "", defaultPageSize: 20, allowUserCreateIssue: true,
+      aiEnabled: true, aiUrl: "https://ai.example.com/v1/chat/completions", aiModel: "test-model", clearAiApiKey: false, aiMaxLabels: 2, aiTimeoutSeconds: 60, aiStructuredOutput: false,
+    } });
+    const unstructured = await app.inject({ method: "POST", url: "/api/issues", headers: { cookie: userACookie }, payload: { title: "AI request without structured output" } });
+    await vi.waitFor(() => expect(aiFetchCalls).toHaveLength(2));
+    expect(JSON.parse(String(aiFetchCalls[1]!.init?.body))).not.toHaveProperty("response_format");
+    expect(JSON.parse(String(aiFetchCalls[1]!.init?.body))).not.toHaveProperty("enable_thinking");
+    await vi.waitFor(async () => expect(await prisma.issueLabel.count({ where: { issueId: json<{ id: number }>(unstructured).id } })).toBe(1));
+
     const urgent = await prisma.label.findUniqueOrThrow({ where: { name: "urgent" } });
     expect((await app.inject({ method: "POST", url: "/api/issues", headers: { cookie: userACookie }, payload: { title: "Already labeled", labelIds: [urgent.id] } })).statusCode).toBe(201);
-    expect(aiFetchCalls).toHaveLength(1);
+    expect(aiFetchCalls).toHaveLength(2);
 
     await app.inject({ method: "PUT", url: "/api/admin/settings", headers: { cookie: adminCookie }, payload: {
       name: "IssueFlow", description: "", logoUrl: "", defaultPageSize: 20, allowUserCreateIssue: true,
-      aiEnabled: false, aiUrl: "https://ai.example.com/v1/chat/completions", aiModel: "test-model", clearAiApiKey: false, aiMaxLabels: 2,
+      aiEnabled: false, aiUrl: "https://ai.example.com/v1/chat/completions", aiModel: "test-model", clearAiApiKey: false, aiMaxLabels: 2, aiTimeoutSeconds: 60, aiStructuredOutput: false,
     } });
   });
 
