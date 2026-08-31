@@ -19,6 +19,11 @@ export async function notificationRoutes(app: FastifyInstance, prisma: PrismaCli
     if (!result.count) return { ok: false };
     return { ok: true };
   });
+  app.patch("/notifications/issues/:issueId/read", { preHandler: app.authenticate }, async (request) => {
+    const issueId = parseId((request.params as { issueId: string }).issueId);
+    const result = await prisma.notification.updateMany({ where: { issueId, userId: request.currentUser.id, readAt: null }, data: { readAt: new Date() } });
+    return { ok: true, count: result.count };
+  });
   app.post("/notifications/read-all", { preHandler: app.authenticate }, async (request) => {
     const result = await prisma.notification.updateMany({ where: { userId: request.currentUser.id, readAt: null }, data: { readAt: new Date() } });
     return { ok: true, count: result.count };
