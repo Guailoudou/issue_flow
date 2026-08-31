@@ -14,7 +14,7 @@ export interface Issue {
   assignees: User[]; productOwners: User[]; developerOwners: User[]; labels: Label[]; milestone?: Milestone | null; commentsCount?: number; isProductIssue?: boolean;
   createdAt: string; updatedAt: string; subscribed?: boolean;
 }
-export interface Notification { id: EntityId; type: string; title?: string; message: string; readAt?: string | null; createdAt: string; issue?: Pick<Issue, 'id' | 'number' | 'title'> }
+export interface Notification { id: EntityId; type: string; title?: string; message: string; readAt?: string | null; createdAt: string; issue?: Pick<Issue, 'id' | 'title'> }
 export interface PlatformSettings { platformName: string; name?: string; description?: string; logoUrl?: string; logoText?: string; defaultPageSize: number; allowUserCreateIssue: boolean }
 export interface PageResult<T> { items: T[]; pagination: { page: number; pageSize: number; total: number; totalPages: number }; page?: number; pageSize?: number; total?: number; totalPages?: number; unread?: number }
 export interface DashboardStats { totalUsers: number; activeUsers: number; openIssues: number; closedIssues: number; issuesLast7Days: number; commentsLast7Days: number; recentActivity: TimelineEvent[] }

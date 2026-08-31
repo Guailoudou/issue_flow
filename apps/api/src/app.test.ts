@@ -305,6 +305,20 @@ describe.sequential("IssueFlow API", () => {
     expect(json<{ items: Array<{ id: number; issueCount: number }> }>(await app.inject({ method: "GET", url: "/api/labels", headers: { cookie: userACookie } })).items.find(({ id }) => id === labelId)?.issueCount).toBe(1);
   });
 
+  it("marks every notification from the same issue as read for the current user", async () => {
+    await prisma.notification.createMany({ data: [
+      { issueId, userId: userBId, type: "COMMENT_CREATED", message: "First grouped notification" },
+      { issueId, userId: userBId, type: "ISSUE_EDITED", message: "Second grouped notification" },
+      { issueId, userId: userAId, type: "ISSUE_EDITED", message: "Another user's notification" },
+    ] });
+
+    const response = await app.inject({ method: "PATCH", url: `/api/notifications/issues/${issueId}/read`, headers: { cookie: userBCookie } });
+    expect(response.statusCode).toBe(200);
+    expect(json<{ count: number }>(response).count).toBe(3);
+    expect(await prisma.notification.count({ where: { issueId, userId: userBId, readAt: null } })).toBe(0);
+    expect(await prisma.notification.count({ where: { issueId, userId: userAId, readAt: null } })).toBe(1);
+  });
+
   it("records precise title changes and skips vague no-op edit events", async () => {
     const created = await app.inject({ method: "POST", url: "/api/issues", headers: { cookie: userACookie }, payload: { title: "Old timeline title", body: "Old body" } });
     const issue = json<{ id: number; updatedAt: string }>(created);
