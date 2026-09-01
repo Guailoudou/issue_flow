@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminPlatformSettingSchema, changePasswordSchema, commitActionSchema, createApiTokenSchema, createIssueSchema, issueExportQuerySchema, issueQuerySchema, labelSchema, ossSettingSchema, registerUserSchema, updateProfileSchema, updateUserSchema, yunxiaoIntegrationSchema } from "./index";
+import { adminPlatformSettingSchema, changePasswordSchema, commitActionSchema, createApiTokenSchema, createIssueSchema, desktopIssueSummarySchema, issueExportQuerySchema, issueQuerySchema, labelSchema, ossSettingSchema, registerUserSchema, updateProfileSchema, updateUserSchema, yunxiaoIntegrationSchema } from "./index";
 
 describe("shared API schemas", () => {
   it("trims and validates issue titles", () => {
@@ -68,5 +68,15 @@ describe("shared API schemas", () => {
     expect(ossSettingSchema.safeParse({ storageMode: "S3", endpoint: "https://s3.example.com", bucket: "issueflow-test", prefix: "files", accessKeyId: "new", clearCredentials: true }).success).toBe(false);
     expect(ossSettingSchema.parse({ storageMode: "WEBDAV", webdavUrl: "https://dav.example.com/", webdavPath: "/issueflow/files/" })).toMatchObject({ webdavUrl: "https://dav.example.com", webdavPath: "issueflow/files" });
     expect(ossSettingSchema.safeParse({ storageMode: "WEBDAV", webdavUrl: "ftp://dav.example.com", webdavPath: "../files" }).success).toBe(false);
+  });
+
+  it("accepts every distinct product and development owner in a desktop summary", () => {
+    const assignees = Array.from({ length: 40 }, (_, index) => ({ id: index + 1, username: `owner-${index + 1}`, displayName: `Owner ${index + 1}` }));
+    const summary = {
+      id: 1, title: "Forty owners", state: "OPEN", bodyExcerpt: "", updatedAt: "2026-08-31T10:00:00.000Z", closedAt: null,
+      relationReasons: ["ASSIGNED"], assignees, labels: [], additionalLabelCount: 0, unreadCount: 0, subscribed: true, muted: false, latestNotification: null,
+    };
+    expect(desktopIssueSummarySchema.safeParse(summary).success).toBe(true);
+    expect(desktopIssueSummarySchema.safeParse({ ...summary, assignees: [...assignees, { id: 41, username: "owner-41", displayName: "Owner 41" }] }).success).toBe(false);
   });
 });

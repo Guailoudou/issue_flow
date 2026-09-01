@@ -8,25 +8,28 @@ datasource db {
 }
 
 model User {
-  id            Int               @id @default(autoincrement())
-  username      String            @unique
-  passwordHash  String
-  displayName   String
-  email         String?
-  role          String            @default("USER")
-  active        Boolean           @default(true)
-  createdAt     DateTime          @default(now())
-  updatedAt     DateTime          @updatedAt
-  sessions      Session[]
-  apiTokens     ApiToken[]
-  issues        Issue[]           @relation("IssueAuthor")
-  assignments   IssueAssignee[]
-  comments      Comment[]
-  events        TimelineEvent[]
-  subscriptions Subscription[]
-  notifications Notification[]
-  attachments   IssueAttachment[] @relation("AttachmentUploader")
-  businessRoles UserRole[]
+  id                     Int                     @id @default(autoincrement())
+  username               String                  @unique
+  passwordHash           String
+  displayName            String
+  email                  String?
+  role                   String                  @default("USER")
+  active                 Boolean                 @default(true)
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  sessions               Session[]
+  apiTokens              ApiToken[]
+  desktopPairings        DesktopPairing[]        @relation("DesktopPairingApproval")
+  desktopPreference      DesktopPreference?
+  issueNotificationMutes IssueNotificationMute[]
+  issues                 Issue[]                 @relation("IssueAuthor")
+  assignments            IssueAssignee[]
+  comments               Comment[]
+  events                 TimelineEvent[]
+  subscriptions          Subscription[]
+  notifications          Notification[]
+  attachments            IssueAttachment[]       @relation("AttachmentUploader")
+  businessRoles          UserRole[]
 
   @@index([active])
 }
@@ -49,13 +52,50 @@ model ApiToken {
   name        String
   tokenHash   String    @unique
   tokenPrefix String
+  kind        String    @default("PERSONAL")
+  deviceName  String?
   expiresAt   DateTime?
   lastUsedAt  DateTime?
   createdAt   DateTime  @default(now())
   user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
+  @@index([userId, kind, createdAt])
   @@index([expiresAt])
+}
+
+model DesktopPairing {
+  id               String    @id
+  deviceName       String
+  userCodeHash     String    @unique
+  deviceSecretHash String
+  approvedUserId   Int?
+  expiresAt        DateTime
+  approvedAt       DateTime?
+  consumedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  approvedUser     User?     @relation("DesktopPairingApproval", fields: [approvedUserId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@index([approvedUserId, createdAt])
+}
+
+model DesktopPreference {
+  userId                         Int      @id
+  systemNotificationsEnabled     Boolean  @default(true)
+  assignmentNotificationsEnabled Boolean  @default(true)
+  mentionNotificationsEnabled    Boolean  @default(true)
+  statusNotificationsEnabled     Boolean  @default(true)
+  assigneeNotificationsEnabled   Boolean  @default(true)
+  commentNotificationsEnabled    Boolean  @default(false)
+  doNotDisturbEnabled            Boolean  @default(false)
+  doNotDisturbStart              String?
+  doNotDisturbEnd                String?
+  timeZone                       String   @default("UTC")
+  recentlyClosedDays             Int      @default(7)
+  createdAt                      DateTime @default(now())
+  updatedAt                      DateTime @updatedAt
+  user                           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model PlatformSetting {
@@ -77,26 +117,27 @@ model PlatformSetting {
 }
 
 model Issue {
-  id             Int               @id @default(autoincrement())
-  title          String
-  body           String            @default("")
-  state          String            @default("OPEN")
-  authorId       Int
-  milestoneId    Int?
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
-  closedAt       DateTime?
-  isProductIssue Boolean           @default(false)
-  author         User              @relation("IssueAuthor", fields: [authorId], references: [id], onDelete: Restrict)
-  milestone      Milestone?        @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
-  assignees      IssueAssignee[]
-  labels         IssueLabel[]
-  comments       Comment[]
-  timeline       TimelineEvent[]
-  subscriptions  Subscription[]
-  notifications  Notification[]
-  codeReferences CodeReference[]
-  attachments    IssueAttachment[]
+  id                Int                     @id @default(autoincrement())
+  title             String
+  body              String                  @default("")
+  state             String                  @default("OPEN")
+  authorId          Int
+  milestoneId       Int?
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  closedAt          DateTime?
+  isProductIssue    Boolean                 @default(false)
+  author            User                    @relation("IssueAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  milestone         Milestone?              @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+  assignees         IssueAssignee[]
+  labels            IssueLabel[]
+  comments          Comment[]
+  timeline          TimelineEvent[]
+  subscriptions     Subscription[]
+  notifications     Notification[]
+  notificationMutes IssueNotificationMute[]
+  codeReferences    CodeReference[]
+  attachments       IssueAttachment[]
 
   @@index([state, updatedAt])
   @@index([authorId])
@@ -121,7 +162,7 @@ model IssueAttachment {
 }
 
 model OssSetting {
-  id                       Int       @id @default(1)
+  id                       Int       @id @default(autoincrement())
   storageMode              String    @default("LOCAL")
   enabled                  Boolean   @default(false)
   endpoint                 String    @default("")
@@ -215,13 +256,13 @@ model UserRole {
 }
 
 model Label {
-  id          Int          @id @default(autoincrement())
-  name        String       @unique
-  description String       @default("")
-  color       String
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  issues      IssueLabel[]
+  id            Int                 @id @default(autoincrement())
+  name          String              @unique
+  description   String              @default("")
+  color         String
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  issues        IssueLabel[]
   commitActions CommitActionLabel[]
 }
 
@@ -318,4 +359,15 @@ model Notification {
   issue     Issue?    @relation(fields: [issueId], references: [id], onDelete: Cascade)
 
   @@index([userId, readAt, createdAt])
+}
+
+model IssueNotificationMute {
+  userId    Int
+  issueId   Int
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  issue     Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@id([userId, issueId])
+  @@index([issueId])
 }

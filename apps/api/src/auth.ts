@@ -44,6 +44,7 @@ export function installAuth(app: FastifyInstance, prisma: PrismaClient) {
       if (!apiToken) throw new ApiError(401, "API_TOKEN_INVALID", "API token is invalid");
       if (apiToken.expiresAt && apiToken.expiresAt <= now) {
         await prisma.apiToken.deleteMany({ where: { id: apiToken.id } });
+        app.realtime.disconnectToken(apiToken.id);
         throw new ApiError(401, "API_TOKEN_EXPIRED", "API token has expired");
       }
       if (!apiToken.user.active) throw new ApiError(401, "API_TOKEN_INVALID", "API token is invalid");
@@ -51,6 +52,8 @@ export function installAuth(app: FastifyInstance, prisma: PrismaClient) {
         await prisma.apiToken.updateMany({ where: { id: apiToken.id }, data: { lastUsedAt: now } });
       }
       request.currentUser = apiToken.user;
+      request.apiTokenId = apiToken.id;
+      request.apiTokenExpiresAt = apiToken.expiresAt;
       return;
     }
     const token = request.cookies[COOKIE_NAME];

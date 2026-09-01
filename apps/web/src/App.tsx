@@ -17,6 +17,7 @@ const NewIssuePage = lazyPage(() => import('./pages/NewIssuePage'), 'NewIssuePag
 const NotificationsPage = lazyPage(() => import('./pages/NotificationsPage'), 'NotificationsPage');
 const ApiTokensPage = lazyPage(() => import('./pages/ApiTokensPage'), 'ApiTokensPage');
 const ProfilePage = lazyPage(() => import('./pages/ProfilePage'), 'ProfilePage');
+const DesktopAuthorizePage = lazyPage(() => import('./pages/DesktopAuthorizePage'), 'DesktopAuthorizePage');
 const ForbiddenPage = lazyPage(() => import('./pages/StatePages'), 'ForbiddenPage');
 const NotFoundPage = lazyPage(() => import('./pages/StatePages'), 'NotFoundPage');
 const AdminDashboardPage = lazyPage(() => import('./pages/admin/AdminDashboardPage'), 'AdminDashboardPage');
@@ -48,6 +49,8 @@ export function App() {
             <Route path="notifications" element={<NotificationsPage />} />
             <Route path="settings/api-tokens" element={<ApiTokensPage />} />
             <Route path="settings/profile" element={<ProfilePage />} />
+            <Route path="desktop/authorize" element={<DesktopAuthorizePage />} />
+            <Route path="desktop/pair" element={<DesktopAuthorizePage />} />
             <Route path="403" element={<ForbiddenPage />} />
             <Route element={<RequireAdmin />}>
               <Route path="admin" element={<AdminShell />}>

@@ -3,12 +3,32 @@ import type { FastifyInstance } from "fastify";
 import { Prisma, type PrismaClient, type YunxiaoIntegration } from "@prisma/client";
 import { yunxiaoIntegrationSchema, yunxiaoTestSchema } from "@issueflow/shared";
 import { ApiError } from "../../errors";
-import { parseId, timelineData } from "../../utils";
+import { issueRelatedUserIds, parseId, timelineData } from "../../utils";
 import { createRepositoryWebhook, testRepository, type YunxiaoFetch } from "./client";
 import { decryptSecret, encryptSecret, requireEncryptionKey, safeSecretEqual } from "./crypto";
 
 type JsonObject = Record<string, unknown>;
 type CommitActionConfig = Prisma.CommitActionGetPayload<{ include: { labels: { select: { labelId: true } } } }>;
+
+interface YunxiaoRealtimeEffects {
+  changedIssues: Array<{ issueId: number; actorId: number }>;
+  notificationIds: number[];
+}
+
+interface YunxiaoProcessingResult<T> {
+  summary: T;
+  realtime: YunxiaoRealtimeEffects;
+}
+
+interface RealtimeNotificationRecord {
+  id: number;
+  userId: number;
+  issueId: number | null;
+  type: string;
+  message: string;
+  readAt: Date | null;
+  createdAt: Date;
+}
 
 export interface YunxiaoRouteOptions {
   encryptionKey?: string;
@@ -134,6 +154,18 @@ async function existingIssueIds(tx: Prisma.TransactionClient, ids: number[]) {
   return new Set((await tx.issue.findMany({ where: { id: { in: ids } }, select: { id: true } })).map((issue) => issue.id));
 }
 
+async function createIssueNotifications(
+  tx: Prisma.TransactionClient,
+  data: Array<{ userId: number; issueId: number; type: string; message: string }>,
+) {
+  const notificationIds: number[] = [];
+  for (const notification of data) {
+    const created = await tx.notification.create({ data: notification, select: { id: true } });
+    notificationIds.push(created.id);
+  }
+  return notificationIds;
+}
+
 async function processPush(tx: Prisma.TransactionClient, payload: JsonObject, integration: YunxiaoIntegration) {
   const ref = firstString(payload.ref, payload.branch, payload.refName).replace(/^refs\/heads\//, "");
   const commits = Array.isArray(payload.commits) ? payload.commits.map(asObject) : [];
@@ -150,6 +182,8 @@ async function processPush(tx: Prisma.TransactionClient, payload: JsonObject, in
   let closedIssues = 0;
   let reopenedIssues = 0;
   let labeledIssues = 0;
+  const changedIssueIds = new Set<number>();
+  const notificationIds: number[] = [];
   for (const commit of commits) {
     const sha = firstString(commit.id, commit.sha, commit.commitId);
     if (!sha) continue;
@@ -167,32 +201,49 @@ async function processPush(tx: Prisma.TransactionClient, payload: JsonObject, in
     for (const [issueId, action] of combinedPushActions(message, actions)) {
       if (!validIds.has(issueId)) continue;
       const state = action.state;
-      const stateChanged = state ? await tx.issue.updateMany({ where: { id: issueId, state: { not: state } }, data: { state, closedAt: state === "CLOSED" ? new Date() : null } }) : { count: 0 };
+      const stateChanged = state ? await tx.issue.updateMany({ where: { id: issueId, state: { not: state } }, data: { state, closedAt: state === "CLOSED" ? new Date() : null, updatedAt: new Date() } }) : { count: 0 };
       const configuredLabelIds = [...action.labelIds];
       const existingLabelIds = configuredLabelIds.length ? new Set((await tx.issueLabel.findMany({ where: { issueId, labelId: { in: configuredLabelIds } }, select: { labelId: true } })).map(({ labelId }) => labelId)) : new Set<number>();
       const addedLabelIds = configuredLabelIds.filter((labelId) => !existingLabelIds.has(labelId));
       if (addedLabelIds.length) {
         await tx.issueLabel.createMany({ data: addedLabelIds.map((labelId) => ({ issueId, labelId })) });
+        if (!stateChanged.count) await tx.issue.update({ where: { id: issueId }, data: { updatedAt: new Date() } });
         await tx.timelineEvent.create({ data: { issueId, actorId: actor!.id, type: "LABELS_CHANGED", data: timelineData({ added: addedLabelIds, removed: [], action: action.keywords.join(","), source: "YUNXIAO" }) } });
         labeledIssues += 1;
+        changedIssueIds.add(issueId);
       }
       if (stateChanged.count) {
         await tx.timelineEvent.create({ data: { issueId, actorId: actor!.id, type: state === "CLOSED" ? "ISSUE_CLOSED_BY_YUNXIAO_COMMIT" : "ISSUE_REOPENED_BY_YUNXIAO_COMMIT", data: timelineData({ commitSha: sha, title: message.slice(0, 500), url, action: action.keywords.join(","), source: "YUNXIAO" }) } });
         const subscriptions = await tx.subscription.findMany({ where: { issueId }, select: { userId: true } });
-        if (subscriptions.length) await tx.notification.createMany({ data: subscriptions.map(({ userId }) => ({ userId, issueId, type: state === "CLOSED" ? "YUNXIAO_COMMIT_CLOSED" : "YUNXIAO_COMMIT_REOPENED", message: `Issue #${issueId} was ${state === "CLOSED" ? "closed" : "reopened"} by Yunxiao commit: ${message}`.slice(0, 1000) })) });
+        notificationIds.push(...await createIssueNotifications(tx, subscriptions.map(({ userId }) => ({
+          userId,
+          issueId,
+          type: state === "CLOSED" ? "YUNXIAO_COMMIT_CLOSED" : "YUNXIAO_COMMIT_REOPENED",
+          message: `Issue #${issueId} was ${state === "CLOSED" ? "closed" : "reopened"} by Yunxiao commit: ${message}`.slice(0, 1000),
+        }))));
+        changedIssueIds.add(issueId);
         if (state === "CLOSED") closedIssues += 1;
         else reopenedIssues += 1;
       }
     }
   }
-  return { references, closedIssues, reopenedIssues, labeledIssues, commits: commits.length };
+  return {
+    summary: { references, closedIssues, reopenedIssues, labeledIssues, commits: commits.length },
+    realtime: {
+      changedIssues: actor ? [...changedIssueIds].map((issueId) => ({ issueId, actorId: actor.id })) : [],
+      notificationIds,
+    },
+  } satisfies YunxiaoProcessingResult<{ references: number; closedIssues: number; reopenedIssues: number; labeledIssues: number; commits: number }>;
 }
 
 async function notifyExternalClose(tx: Prisma.TransactionClient, issueId: number, mrTitle: string) {
   const subscriptions = await tx.subscription.findMany({ where: { issueId }, select: { userId: true } });
-  if (subscriptions.length) await tx.notification.createMany({
-    data: subscriptions.map(({ userId }) => ({ userId, issueId, type: "YUNXIAO_MR_MERGED", message: `Issue #${issueId} was closed by merged Yunxiao MR: ${mrTitle}` })),
-  });
+  return createIssueNotifications(tx, subscriptions.map(({ userId }) => ({
+    userId,
+    issueId,
+    type: "YUNXIAO_MR_MERGED",
+    message: `Issue #${issueId} was closed by merged Yunxiao MR: ${mrTitle}`,
+  })));
 }
 
 async function processMergeRequest(tx: Prisma.TransactionClient, payload: JsonObject, integration: YunxiaoIntegration) {
@@ -219,6 +270,8 @@ async function processMergeRequest(tx: Prisma.TransactionClient, payload: JsonOb
   if (!actor) throw new ApiError(503, "ADMIN_REQUIRED", "The integration requires an administrator account");
   let references = 0;
   let closedIssues = 0;
+  const changedIssueIds = new Set<number>();
+  const notificationIds: number[] = [];
   for (const issueId of ids.filter((id) => validIds.has(id))) {
     await tx.codeReference.upsert({
       where: { issueId_type_externalId: { issueId, type: "MERGE_REQUEST", externalId: iid } },
@@ -227,15 +280,75 @@ async function processMergeRequest(tx: Prisma.TransactionClient, payload: JsonOb
     });
     references += 1;
     if (merged && closingIds.has(issueId)) {
-      const changed = await tx.issue.updateMany({ where: { id: issueId, state: { not: "CLOSED" } }, data: { state: "CLOSED", closedAt: new Date() } });
+      const changed = await tx.issue.updateMany({ where: { id: issueId, state: { not: "CLOSED" } }, data: { state: "CLOSED", closedAt: new Date(), updatedAt: new Date() } });
       if (changed.count) {
         await tx.timelineEvent.create({ data: { issueId, actorId: actor.id, type: "ISSUE_CLOSED_BY_YUNXIAO_MR", data: timelineData({ mergeRequestId: iid, title, url, source: "YUNXIAO" }) } });
-        await notifyExternalClose(tx, issueId, title);
+        notificationIds.push(...await notifyExternalClose(tx, issueId, title));
+        changedIssueIds.add(issueId);
         closedIssues += 1;
       }
     }
   }
-  return { references, closedIssues, mergeRequestId: iid };
+  return {
+    summary: { references, closedIssues, mergeRequestId: iid },
+    realtime: {
+      changedIssues: [...changedIssueIds].map((issueId) => ({ issueId, actorId: actor.id })),
+      notificationIds,
+    },
+  } satisfies YunxiaoProcessingResult<{ references: number; closedIssues: number; mergeRequestId: string }>;
+}
+
+export async function publishYunxiaoRealtime(
+  app: FastifyInstance,
+  prisma: PrismaClient,
+  effects: YunxiaoRealtimeEffects,
+) {
+  for (const changed of effects.changedIssues) {
+    try {
+      const issue = await prisma.issue.findUnique({ where: { id: changed.issueId }, select: { id: true, updatedAt: true } });
+      if (!issue) continue;
+      const userIds = await issueRelatedUserIds(prisma, issue.id);
+      app.realtime.publish(userIds, {
+        type: "issue.changed",
+        issueId: issue.id,
+        updatedAt: issue.updatedAt.toISOString(),
+        actorId: changed.actorId,
+      });
+    } catch (error) {
+      app.log.warn({ err: error, issueId: changed.issueId }, "Yunxiao realtime issue event publish failed");
+    }
+  }
+
+  if (!effects.notificationIds.length) return;
+  let notifications: RealtimeNotificationRecord[];
+  try {
+    notifications = await prisma.notification.findMany({
+      where: { id: { in: effects.notificationIds } },
+    });
+  } catch (error) {
+    app.log.warn({ err: error, notificationIds: effects.notificationIds }, "Yunxiao realtime notifications could not be loaded");
+    return;
+  }
+  const notificationById = new Map(notifications.map((notification) => [notification.id, notification]));
+  for (const notificationId of effects.notificationIds) {
+    const notification = notificationById.get(notificationId);
+    if (!notification) continue;
+    try {
+      app.realtime.publish([notification.userId], {
+        type: "notification.created",
+        notification: {
+          id: notification.id,
+          issueId: notification.issueId,
+          type: notification.type,
+          message: notification.message,
+          readAt: notification.readAt?.toISOString() ?? null,
+          createdAt: notification.createdAt.toISOString(),
+        },
+      });
+    } catch (error) {
+      app.log.warn({ err: error, notificationId }, "Yunxiao realtime notification publish failed");
+    }
+  }
 }
 
 async function acquireDelivery(prisma: PrismaClient, key: string, type: string) {
@@ -319,14 +432,16 @@ export async function yunxiaoRoutes(app: FastifyInstance, prisma: PrismaClient, 
     const acquired = await acquireDelivery(prisma, keyValue, type);
     reply.status(202);
     if (acquired.duplicate) return { accepted: true, duplicate: true };
+    let result: YunxiaoProcessingResult<unknown>;
     try {
-      const summary = await prisma.$transaction(async (tx) => type === "PUSH" ? processPush(tx, payload, integration) : processMergeRequest(tx, payload, integration));
-      await prisma.webhookDelivery.update({ where: { id: acquired.delivery.id }, data: { status: "PROCESSED", processedAt: new Date(), summary: JSON.stringify(summary), error: null } });
-      return { accepted: true, duplicate: false };
+      result = await prisma.$transaction(async (tx) => type === "PUSH" ? processPush(tx, payload, integration) : processMergeRequest(tx, payload, integration));
+      await prisma.webhookDelivery.update({ where: { id: acquired.delivery.id }, data: { status: "PROCESSED", processedAt: new Date(), summary: JSON.stringify(result.summary), error: null } });
     } catch (error) {
       await prisma.webhookDelivery.update({ where: { id: acquired.delivery.id }, data: { status: "FAILED", processedAt: new Date(), error: error instanceof Error ? error.message.slice(0, 500) : "Processing failed" } });
       throw error;
     }
+    await publishYunxiaoRealtime(app, prisma, result.realtime);
+    return { accepted: true, duplicate: false };
   });
 
   app.get("/issues/:id/code-references", { preHandler: app.authenticate }, async (request) => {

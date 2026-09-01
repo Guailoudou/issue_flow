@@ -34,6 +34,8 @@ GET /api/auth/api-tokens
       "id": 12,
       "name": "CI 发布脚本",
       "prefix": "ift_ab12cd34",
+      "kind": "PERSONAL",
+      "deviceName": null,
       "expiresAt": "2026-11-27T08:00:00.000Z",
       "lastUsedAt": null,
       "createdAt": "2026-08-29T08:00:00.000Z"
@@ -63,6 +65,8 @@ Content-Type: application/json
     "id": 12,
     "name": "CI 发布脚本",
     "prefix": "ift_ab12cd34",
+    "kind": "PERSONAL",
+    "deviceName": null,
     "expiresAt": "2026-11-27T08:00:00.000Z",
     "lastUsedAt": null,
     "createdAt": "2026-08-29T08:00:00.000Z"
@@ -231,7 +235,34 @@ curl -fL "$ISSUEFLOW_API_BASE/attachments/18/content" \
 
 Issue 表格导出使用 `GET /api/issues/export.xlsx`，必须同时传入 ISO 8601 格式的 `closedFrom` 与 `closedTo`。开放 Issue 不受此时间范围限制，已关闭 Issue 按关闭时间筛选。下载二进制响应时可使用 `curl -OJ` 或 `-o 文件名.xlsx`。
 
-## 5. 错误响应
+## 5. macOS 桌面端接口与实时事件
+
+桌面端通过一次性浏览器配对获得 `kind=DESKTOP`、默认有效期 365 天的 API Token。该 Token 与个人 Token 一样继承当前账户权限，不是额外的受限 Scope；区别只在于设备标识、默认期限和凭据由 macOS Keychain 管理。用户可在 `/settings/api-tokens` 撤销它。
+
+配对流程使用以下接口：
+
+| 方法 | 路径 | 认证 | 说明 |
+| --- | --- | --- | --- |
+| `POST` | `/api/desktop/pairings` | 无 | 创建 10 分钟有效的配对请求；设备 Secret 只返回一次。 |
+| `GET` | `/api/desktop/pairings/verify?code=` | 浏览器 Session | 显示待授权设备；不接受 Bearer Token 代批。 |
+| `POST` | `/api/desktop/pairings/approve` | 浏览器 Session | 当前网页登录用户批准设备。 |
+| `POST` | `/api/desktop/pairings/{id}/exchange` | 设备 Secret | 轮询状态并原子地一次性换取桌面 Token。 |
+
+桌面业务接口：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/desktop/overview` | 返回指派开放、关注开放、最近关闭三分区及真实总数。 |
+| `GET/PATCH` | `/api/desktop/preferences` | 获取或更新通知、免打扰和最近关闭窗口偏好。 |
+| `GET` | `/api/desktop/notification-mutes` | 返回当前用户已静音的全部 Issue ID。 |
+| `PATCH` | `/api/issues/{id}/notifications/read` | 标记当前用户在指定 Issue 下的通知为已读。 |
+| `PUT/DELETE` | `/api/issues/{id}/notification-mute` | 静音或取消静音指定 Issue 的系统横幅。 |
+
+实时连接地址为 `wss://你的域名/api/realtime`，只接受 `Authorization: Bearer ...`，不接受 Cookie 或 URL 查询参数。连接建立后服务端先发送 `hello`；业务事件包括 `issue.changed`、`notification.created`、`notification.read`、`subscription.changed`、`notification-mute.changed` 和 `preferences.changed`。收到业务事件后应失效并重新拉取相应 REST 快照，不能把 WebSocket 当成第二套写 API。服务端每 25 秒发送 JSON `ping` 心跳，客户端不得通过该连接发送业务消息。
+
+当前 Hub 只在单个 API 进程内广播。多 API 实例部署会丢失跨实例实时事件；横向扩容前必须增加共享消息总线。
+
+## 6. 错误响应
 
 错误统一返回以下结构：
 
@@ -258,7 +289,7 @@ Issue 表格导出使用 `GET /api/issues/export.xlsx`，必须同时传入 ISO 
 
 排查服务端错误时，请保留响应中的 `requestId`，便于在日志中定位对应请求。
 
-## 6. 安全建议
+## 7. 安全建议
 
 - 仅通过 HTTPS 发送 Token。
 - 优先选择有限有效期，并为不同脚本分别创建 Token。

@@ -14,5 +14,10 @@ export default defineConfig({
     __ISSUEFLOW_BUILT_AT__: JSON.stringify(builtAt),
   },
   server: { port: 5173, proxy: { '/api': 'http://localhost:3101' } },
+  resolve: {
+    alias: {
+      '@issueflow/shared': new URL('../../packages/shared/src/index.ts', import.meta.url).pathname,
+    },
+  },
   test: { globals: true, environment: 'jsdom', setupFiles: './src/test/setup.ts', css: true },
 });

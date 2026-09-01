@@ -1,12 +1,13 @@
 # IssueFlow
 
-IssueFlow 是一个使用 Vite、Node.js 和 SQLite 构建的多人 Issue 协作系统，提供管理员平台配置、用户管理以及对齐 GitHub Issues 核心体验的 Issue、评论、标签、里程碑、时间线和通知能力。
+IssueFlow 是一个使用 Vite、Node.js 和 SQLite 构建的多人 Issue 协作系统，提供管理员平台配置、用户管理以及对齐 GitHub Issues 核心体验的 Issue、评论、标签、里程碑、时间线和通知能力，并提供仅面向 macOS 的菜单栏浮窗客户端。
 
 ## 技术栈
 
 - React + Vite + TypeScript
 - Fastify + TypeScript
 - Prisma + SQLite
+- Tauri 2 + Rust（macOS 桌面浮窗）
 - pnpm workspace
 
 ## 本地启动
@@ -30,6 +31,8 @@ pnpm dev
 
 登录会话默认保存 30 天。浏览器本地只缓存经过校验的用户展示信息，真正的认证凭据保存在 HttpOnly Cookie 中；刷新页面时仍会向 API 重新验证会话。可通过 `SESSION_TTL_DAYS` 调整会话期限。
 
+API 位于反向代理之后时，应把 `TRUST_PROXY_HOPS` 配置为请求到达 API 前的可信代理跳数；内置 Docker Compose 只有一层 Nginx，已固定为 `1`。直接暴露 API 时保持默认 `0`，避免信任客户端伪造的 `X-Forwarded-For`。
+
 系统支持使用邀请码注册普通账号。本地环境在 API 的 `.env` 中设置 `REGISTRATION_INVITE_CODE`，Docker 部署在 `.env.docker` 中设置 `ISSUEFLOW_REGISTRATION_INVITE_CODE`。留空时注册 API 禁用；注册成功后会直接建立登录会话。邀请码只在服务端环境中保存，不会写入数据库或返回前端。
 
 Issue 列表支持按当前搜索、作者、负责人、标签和里程碑条件导出 `.xlsx`。导出时选择关闭时间范围：所有未关闭 Issue 无视时间始终导出，已关闭 Issue 仅在关闭时间落入所选区间时导出。生成的工作簿沿用 `【需求进度管理表】（八月份）.xlsx` 的双行 14 列结构。新建 Issue 时可一并选择附件，详情页也支持继续上传、图片预览、下载和按权限删除。附件不限文件类型，单个不超过 10 MiB，每个 Issue 最多 20 个；本地默认保存到 `apps/api/uploads`，可通过 `UPLOAD_DIR` 修改。
@@ -37,6 +40,33 @@ Issue 列表支持按当前搜索、作者、负责人、标签和里程碑条�
 管理员可在“管理后台 → 平台概览”查看前端、后端各自的语义版本、构建标识和构建时间。Docker 重新构建对应镜像后构建标识会更新，可用于判断浏览器缓存或服务镜像是否仍是旧版本。
 
 登录用户可在 `/settings/profile` 分别修改显示名称和密码；密码修改成功后全部会话及 API Token 会失效。管理员可以在用户管理中修改其他用户的用户名。用户还可在 `/settings/api-tokens` 创建个人 API Token，并通过 `Authorization: Bearer <token>` 直接调用后端；详细接口和示例参见 [API 使用说明](./API使用说明.md)。
+
+## macOS 桌面浮窗
+
+桌面端常驻菜单栏，聚合“指派给我”“我关注的”和“最近关闭”的 Issue，支持搜索、摘要查看、关注/静音、标记完成与 5 秒撤销。指派和提及默认立即发送系统通知；关注 Issue 仅在状态或负责人变化时提醒，普通评论提醒默认关闭。
+
+首次使用时，桌面端会打开当前 IssueFlow 网页。用户必须在已登录的浏览器 Session 中确认设备配对；换取的桌面 Bearer Token 只保存在 macOS Keychain，可在网页的 API Token 页面随时撤销。生产桌面端只接受 HTTPS/WSS；明文 HTTP/WS 仅供本机开发地址使用。
+
+开发桌面端还需要 Rust stable 和 Xcode Command Line Tools：
+
+```bash
+pnpm install
+pnpm tauri dev
+```
+
+生成供本机安装的 macOS DMG：
+
+```bash
+pnpm tauri build --bundles dmg --config '{"bundle":{"macOS":{"signingIdentity":"-"}}}'
+```
+
+产物位于 `apps/desktop/src-tauri/target/release/bundle/dmg/`。上述命令使用 ad-hoc 签名，只适合本机验证或受控的团队内部测试；首次启动可能需要在 Finder 中右键应用并选择“打开”。正式团队分发应配置 Apple Developer ID、Hardened Runtime 和公证，不应把 ad-hoc 构建作为公开下载版本。
+
+桌面端“服务地址”只填写 IssueFlow 网页根地址，例如 `https://issues.example.com`，不要追加 `/api`、查询参数或页面路径。点击授权后，客户端会请求 `/api/desktop/pairings` 并在默认浏览器中打开 `/desktop/authorize`。如果配对接口返回 `404 NOT_FOUND`，说明线上 API 仍是旧镜像，需要重新构建并部署当前 `api`、`web` 服务；Compose 的 API 启动脚本会自动执行 Prisma 迁移。
+
+默认全局快捷键为 `⌥⌘I`。快捷键、开机启动、窗口置顶和服务地址属于本机设置；通知偏好、免打扰时段与最近关闭窗口按用户同步。
+
+实时同步使用 API 进程内的单实例 WebSocket Hub。当前支持团队内多个用户与每用户多设备连接，但不支持多个 API 实例之间的跨实例事件广播；横向扩容前必须引入 Redis/NATS 等消息总线。
 
 ## Docker 一键部署
 
@@ -63,7 +93,7 @@ docker compose --env-file .env.docker logs -f
 docker compose --env-file .env.docker down
 ```
 
-本地 HTTP 保持 `ISSUEFLOW_COOKIE_SECURE=false`。通过 HTTPS 域名部署时，需要同步修改 `ISSUEFLOW_WEB_ORIGIN`、`ISSUEFLOW_YUNXIAO_WEBHOOK_BASE_URL`，并设置 `ISSUEFLOW_COOKIE_SECURE=true`。
+本地 HTTP 保持 `ISSUEFLOW_COOKIE_SECURE=false`。通过 HTTPS 域名部署时，需要同步修改 `ISSUEFLOW_WEB_ORIGIN`、`ISSUEFLOW_YUNXIAO_WEBHOOK_BASE_URL`，并设置 `ISSUEFLOW_COOKIE_SECURE=true`。若 HTTPS 由 Compose Nginx 前面的另一层代理终止，还要把 `ISSUEFLOW_TRUST_PROXY_HOPS` 从 `1` 改为 `2`；该值必须等于请求到达 API 前的可信代理跳数。
 
 ## 云效 Codeup 联动
 
@@ -104,6 +134,8 @@ S3 模式需要 Endpoint、Bucket、对象前缀和 AccessKey，Region 可留空
 
 ```bash
 pnpm dev
+pnpm tauri dev
+pnpm tauri build --bundles dmg --config '{"bundle":{"macOS":{"signingIdentity":"-"}}}'
 pnpm build
 pnpm typecheck
 pnpm test
@@ -117,6 +149,7 @@ pnpm db:seed
 ```text
 apps/
   api/       Fastify API、Prisma 数据模型和后端测试
+  desktop/   Tauri 2 macOS 菜单栏浮窗、React UI 与 Rust 系统集成
   web/       Vite React 前端和组件测试
 packages/
   shared/    前后端共享 Schema、类型和常量
@@ -124,4 +157,4 @@ design-system/
   issueflow/ 产品视觉与交互规范
 ```
 
-详细范围与验收标准见 [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)、[PRODUCT_SPEC.md](./PRODUCT_SPEC.md)、[YUNXIAO_INTEGRATION_PLAN.md](./YUNXIAO_INTEGRATION_PLAN.md) 和 [DOCKER_DEPLOYMENT_PLAN.md](./DOCKER_DEPLOYMENT_PLAN.md)。API 调用参见 [API 使用说明](./API使用说明.md)。
+详细范围与验收标准见 [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)、[PRODUCT_SPEC.md](./PRODUCT_SPEC.md)、[YUNXIAO_INTEGRATION_PLAN.md](./YUNXIAO_INTEGRATION_PLAN.md)、[FLOATING_WINDOW_IMPLEMENTATION_PLAN.md](./FLOATING_WINDOW_IMPLEMENTATION_PLAN.md) 和 [DOCKER_DEPLOYMENT_PLAN.md](./DOCKER_DEPLOYMENT_PLAN.md)。API 调用参见 [API 使用说明](./API使用说明.md)。

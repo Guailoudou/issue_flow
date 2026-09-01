@@ -15,8 +15,11 @@ export async function notificationRoutes(app: FastifyInstance, prisma: PrismaCli
   });
   app.patch("/notifications/:id/read", { preHandler: app.authenticate }, async (request) => {
     const id = parseId((request.params as { id: string }).id);
-    const result = await prisma.notification.updateMany({ where: { id, userId: request.currentUser.id }, data: { readAt: new Date() } });
+    const notification = await prisma.notification.findFirst({ where: { id, userId: request.currentUser.id }, select: { issueId: true } });
+    const readAt = new Date();
+    const result = await prisma.notification.updateMany({ where: { id, userId: request.currentUser.id }, data: { readAt } });
     if (!result.count) return { ok: false };
+    app.realtime.publish([request.currentUser.id], { type: "notification.read", issueId: notification?.issueId ?? null, notificationIds: [id], readAt: readAt.toISOString() });
     return { ok: true };
   });
   app.patch("/notifications/issues/:issueId/read", { preHandler: app.authenticate }, async (request) => {
@@ -25,7 +28,20 @@ export async function notificationRoutes(app: FastifyInstance, prisma: PrismaCli
     return { ok: true, count: result.count };
   });
   app.post("/notifications/read-all", { preHandler: app.authenticate }, async (request) => {
-    const result = await prisma.notification.updateMany({ where: { userId: request.currentUser.id, readAt: null }, data: { readAt: new Date() } });
+    const readAt = new Date();
+    const result = await prisma.notification.updateMany({ where: { userId: request.currentUser.id, readAt: null }, data: { readAt } });
+    if (result.count) app.realtime.publish([request.currentUser.id], { type: "notification.read", issueId: null, notificationIds: [], readAt: readAt.toISOString() });
     return { ok: true, count: result.count };
+  });
+
+  app.patch("/issues/:id/notifications/read", { preHandler: app.authenticate }, async (request) => {
+    const issueId = parseId((request.params as { id: string }).id);
+    const notifications = await prisma.notification.findMany({ where: { issueId, userId: request.currentUser.id, readAt: null }, select: { id: true } });
+    const readAt = new Date();
+    if (notifications.length) {
+      await prisma.notification.updateMany({ where: { id: { in: notifications.map(({ id }) => id) }, userId: request.currentUser.id }, data: { readAt } });
+      app.realtime.publish([request.currentUser.id], { type: "notification.read", issueId, notificationIds: notifications.map(({ id }) => id), readAt: readAt.toISOString() });
+    }
+    return { ok: true, count: notifications.length, readAt };
   });
 }

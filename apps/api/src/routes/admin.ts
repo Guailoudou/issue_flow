@@ -44,8 +44,15 @@ export async function adminRoutes(app: FastifyInstance, prisma: PrismaClient, ai
       ...(input.active !== undefined ? { active: input.active } : {}),
       ...(input.email !== undefined ? { email: input.email || null } : {}),
     };
-    const user = await prisma.user.update({ where: { id }, data, include: { businessRoles: true } });
-    if (input.active === false) await prisma.$transaction([prisma.session.deleteMany({ where: { userId: id } }), prisma.apiToken.deleteMany({ where: { userId: id } })]);
+    const user = input.active === false
+      ? await prisma.$transaction(async (tx) => {
+        const updated = await tx.user.update({ where: { id }, data, include: { businessRoles: true } });
+        await tx.session.deleteMany({ where: { userId: id } });
+        await tx.apiToken.deleteMany({ where: { userId: id } });
+        return updated;
+      })
+      : await prisma.user.update({ where: { id }, data, include: { businessRoles: true } });
+    if (input.active === false) app.realtime.disconnectUser(id);
     return { user: publicUser(user) };
   });
   app.put("/admin/users/:id/roles", { preHandler: app.authenticate }, async (request) => {
@@ -63,8 +70,12 @@ export async function adminRoutes(app: FastifyInstance, prisma: PrismaClient, ai
   app.post("/admin/users/:id/reset-password", { preHandler: app.requireAdmin }, async (request) => {
     const id = parseId((request.params as { id: string }).id);
     const { password } = resetPasswordSchema.parse(request.body);
-    await prisma.user.update({ where: { id }, data: { passwordHash: await bcrypt.hash(password, 12) } });
-    await prisma.$transaction([prisma.session.deleteMany({ where: { userId: id } }), prisma.apiToken.deleteMany({ where: { userId: id } })]);
+    await prisma.$transaction([
+      prisma.user.update({ where: { id }, data: { passwordHash: await bcrypt.hash(password, 12) } }),
+      prisma.session.deleteMany({ where: { userId: id } }),
+      prisma.apiToken.deleteMany({ where: { userId: id } }),
+    ]);
+    app.realtime.disconnectUser(id);
     return { ok: true };
   });
   app.delete("/admin/users/:id", { preHandler: app.requireAdmin }, async (request) => {
@@ -74,6 +85,7 @@ export async function adminRoutes(app: FastifyInstance, prisma: PrismaClient, ai
     if (target.role === "ADMIN") throw new ApiError(409, "ADMIN_REQUIRED", "The unique administrator cannot be deleted");
     if (Object.values(target._count).some((count) => count > 0)) throw new ApiError(409, "USER_HAS_HISTORY", "Users with activity history must be disabled instead of deleted");
     await prisma.user.delete({ where: { id } });
+    app.realtime.disconnectUser(id);
     return { ok: true };
   });
 

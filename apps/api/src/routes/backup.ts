@@ -10,15 +10,24 @@ const MAX_BACKUP_SIZE = 1024 * 1024 * 1024;
 const modelSpecs = [
   ["platformSetting", ["updatedAt"]], ["ossSetting", ["lastTestedAt", "createdAt", "updatedAt"]],
   ["yunxiaoIntegration", ["lastTestedAt", "createdAt", "updatedAt"]], ["user", ["createdAt", "updatedAt"]],
+  ["desktopPairing", ["expiresAt", "approvedAt", "consumedAt", "createdAt"]], ["desktopPreference", ["createdAt", "updatedAt"]],
   ["label", ["createdAt", "updatedAt"]], ["milestone", ["dueDate", "createdAt", "updatedAt"]],
   ["commitAction", ["createdAt", "updatedAt"]], ["issue", ["createdAt", "updatedAt", "closedAt"]],
   ["session", ["expiresAt", "createdAt"]], ["apiToken", ["expiresAt", "lastUsedAt", "createdAt"]],
   ["userRole", []], ["issueAssignee", []], ["issueLabel", []], ["commitActionLabel", []],
   ["comment", ["createdAt", "updatedAt", "deletedAt"]], ["timelineEvent", ["createdAt"]],
   ["subscription", ["createdAt"]], ["notification", ["readAt", "createdAt"]],
+  ["issueNotificationMute", ["createdAt"]],
   ["codeReference", ["createdAt", "updatedAt"]], ["issueAttachment", ["createdAt"]],
   ["webhookDelivery", ["createdAt", "processedAt", "updatedAt"]],
 ] as const;
+
+export const backupModelNames = modelSpecs.map(([name]) => name);
+const legacyOptionalModels = new Set<string>([
+  "desktopPairing",
+  "desktopPreference",
+  "issueNotificationMute",
+]);
 
 type Row = Record<string, unknown>;
 interface ModelDelegate {
@@ -38,6 +47,19 @@ const backupSchema = z.object({
   data: z.record(z.string(), z.array(rowSchema)),
   attachmentContents: z.array(z.object({ attachmentId: z.number().int().positive(), contentBase64: z.string() })),
 });
+
+export function normalizeBackupModelData(data: Record<string, Row[]>) {
+  const expectedModels = new Set<string>(backupModelNames);
+  const providedModels = Object.keys(data);
+  const hasUnknownModel = providedModels.some((name) => !expectedModels.has(name));
+  const missingRequiredModel = backupModelNames.some(
+    (name) => !Object.prototype.hasOwnProperty.call(data, name) && !legacyOptionalModels.has(name),
+  );
+  if (hasUnknownModel || missingRequiredModel) {
+    throw new ApiError(400, "INVALID_BACKUP", "Backup model set does not match this IssueFlow version");
+  }
+  return Object.fromEntries(backupModelNames.map((name) => [name, data[name] ?? []])) as Record<string, Row[]>;
+}
 
 function restoredRows(rows: Row[], dateFields: readonly string[]) {
   return rows.map((source) => {
@@ -86,12 +108,9 @@ export async function backupRoutes(app: FastifyInstance, prisma: PrismaClient, o
     const result = backupSchema.safeParse(parsed);
     if (!result.success) throw new ApiError(400, "INVALID_BACKUP", "Backup format is invalid", result.error.issues);
     const backup = result.data;
-    const expectedModels = new Set(modelSpecs.map(([name]) => name));
-    if (Object.keys(backup.data).length !== expectedModels.size || Object.keys(backup.data).some((name) => !expectedModels.has(name as typeof modelSpecs[number][0]))) {
-      throw new ApiError(400, "INVALID_BACKUP", "Backup model set does not match this IssueFlow version");
-    }
-    if (!rowsFor(backup.data, "user").some((row) => row.role === "ADMIN" && row.active === true)) throw new ApiError(400, "INVALID_BACKUP", "Backup must contain an active administrator");
-    if (rowsFor(backup.data, "platformSetting").length !== 1 || rowsFor(backup.data, "ossSetting").length !== 1) throw new ApiError(400, "INVALID_BACKUP", "Backup singleton settings are invalid");
+    const backupData = normalizeBackupModelData(backup.data);
+    if (!rowsFor(backupData, "user").some((row) => row.role === "ADMIN" && row.active === true)) throw new ApiError(400, "INVALID_BACKUP", "Backup must contain an active administrator");
+    if (rowsFor(backupData, "platformSetting").length !== 1 || rowsFor(backupData, "ossSetting").length !== 1) throw new ApiError(400, "INVALID_BACKUP", "Backup singleton settings are invalid");
 
     const contentById = new Map<number, Buffer>();
     for (const item of backup.attachmentContents) {
@@ -99,11 +118,11 @@ export async function backupRoutes(app: FastifyInstance, prisma: PrismaClient, o
       if (content.toString("base64") !== item.contentBase64 || contentById.has(item.attachmentId)) throw new ApiError(400, "INVALID_BACKUP", "Backup attachment content is invalid or duplicated");
       contentById.set(item.attachmentId, content);
     }
-    const attachmentRows = rowsFor(backup.data, "issueAttachment");
+    const attachmentRows = rowsFor(backupData, "issueAttachment");
     if (contentById.size !== attachmentRows.length) throw new ApiError(400, "INVALID_BACKUP", "Backup attachment content is incomplete");
     const stagedPaths: string[] = [];
     const restoredData: Record<string, Row[]> = {};
-    for (const [name, dateFields] of modelSpecs) restoredData[name] = restoredRows(rowsFor(backup.data, name), dateFields);
+    for (const [name, dateFields] of modelSpecs) restoredData[name] = restoredRows(rowsFor(backupData, name), dateFields);
     try {
       await mkdir(uploadDir, { recursive: true });
       restoredData.issueAttachment = rowsFor(restoredData, "issueAttachment").map((row) => {
@@ -138,6 +157,7 @@ export async function backupRoutes(app: FastifyInstance, prisma: PrismaClient, o
       }
       throw error;
     }
+    app.realtime.disconnectAll();
     void (async () => {
       for (const attachment of oldAttachments) await deleteAttachmentContent(prisma, uploadDir, attachment, options, oldSetting).catch(() => undefined);
     })();

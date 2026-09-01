@@ -7,6 +7,8 @@
     "dev": "pnpm --parallel --filter @issueflow/api --filter @issueflow/web dev",
     "dev:api": "pnpm --filter @issueflow/api dev",
     "dev:web": "pnpm --filter @issueflow/web dev",
+    "dev:desktop": "pnpm --filter @issueflow/desktop dev",
+    "tauri": "pnpm --filter @issueflow/desktop tauri",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
