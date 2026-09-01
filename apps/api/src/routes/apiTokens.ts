@@ -7,8 +7,8 @@ import { parseId } from "../utils";
 
 const MAX_API_TOKENS_PER_USER = 20;
 
-function publicApiToken(token: Pick<ApiToken, "id" | "name" | "tokenPrefix" | "expiresAt" | "lastUsedAt" | "createdAt">) {
-  return { id: token.id, name: token.name, prefix: token.tokenPrefix, expiresAt: token.expiresAt, lastUsedAt: token.lastUsedAt, createdAt: token.createdAt };
+function publicApiToken(token: Pick<ApiToken, "id" | "name" | "tokenPrefix" | "kind" | "deviceName" | "expiresAt" | "lastUsedAt" | "createdAt">) {
+  return { id: token.id, name: token.name, prefix: token.tokenPrefix, kind: token.kind, deviceName: token.deviceName, expiresAt: token.expiresAt, lastUsedAt: token.lastUsedAt, createdAt: token.createdAt };
 }
 
 export async function apiTokenRoutes(app: FastifyInstance, prisma: PrismaClient) {
@@ -42,6 +42,7 @@ export async function apiTokenRoutes(app: FastifyInstance, prisma: PrismaClient)
     const id = parseId((request.params as { id: string }).id);
     const deleted = await prisma.apiToken.deleteMany({ where: { id, userId: request.currentUser.id } });
     if (!deleted.count) throw new ApiError(404, "API_TOKEN_NOT_FOUND", "API token not found");
+    app.realtime.disconnectToken(id);
     return reply.status(204).send();
   });
 }

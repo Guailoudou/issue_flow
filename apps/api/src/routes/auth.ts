@@ -59,6 +59,7 @@ export async function authRoutes(app: FastifyInstance, prisma: PrismaClient) {
       prisma.session.deleteMany({ where: { userId: request.currentUser.id } }),
       prisma.apiToken.deleteMany({ where: { userId: request.currentUser.id } }),
     ]);
+    app.realtime.disconnectUser(request.currentUser.id);
     reply.clearCookie(COOKIE_NAME, cookieOptions());
     return { ok: true };
   });

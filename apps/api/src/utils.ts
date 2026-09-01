@@ -1,5 +1,6 @@
-import type { PrismaClient, User, UserRole } from "@prisma/client";
+import type { Notification, Prisma, PrismaClient, User, UserRole } from "@prisma/client";
 import { ApiError } from "./errors";
+import type { RealtimeHub } from "./realtime/hub";
 
 type UserWithRoles = User & { businessRoles?: UserRole[] };
 export const publicUser = ({ passwordHash: _, businessRoles = [], ...user }: UserWithRoles) => ({ ...user, roles: businessRoles.map(({ role }) => role) });
@@ -22,10 +23,49 @@ export async function issueAccess(prisma: PrismaClient, issueId: number, user: U
 
 export const timelineData = (data: unknown) => JSON.stringify(data);
 
-export async function notifyIssue(prisma: PrismaClient, issueId: number, actorId: number, type: string, message: string, extraUserIds: number[] = []) {
+export async function notifyIssue(
+  prisma: Pick<Prisma.TransactionClient, "subscription" | "notification">,
+  issueId: number,
+  actorId: number,
+  type: string,
+  message: string,
+  extraUserIds: number[] = [],
+  extraType = type,
+  extraMessage = message,
+) {
   const subscriptions = await prisma.subscription.findMany({ where: { issueId }, select: { userId: true } });
-  const userIds = [...new Set([...subscriptions.map((item) => item.userId), ...extraUserIds])].filter((id) => id !== actorId);
-  if (userIds.length) await prisma.notification.createMany({ data: userIds.map((userId) => ({ userId, issueId, type, message })) });
+  const recipients = new Map<number, { type: string; message: string }>();
+  for (const { userId } of subscriptions) if (userId !== actorId) recipients.set(userId, { type, message });
+  for (const userId of extraUserIds) if (userId !== actorId) recipients.set(userId, { type: extraType, message: extraMessage });
+  if (!recipients.size) return [];
+  const notifications: Notification[] = [];
+  for (const [userId, notification] of recipients) {
+    notifications.push(await prisma.notification.create({ data: { userId, issueId, ...notification } }));
+  }
+  return notifications;
+}
+
+export function publishNotifications(realtime: RealtimeHub, notifications: Notification[]) {
+  if (!notifications.length) return;
+  for (const notification of notifications) realtime.publish([notification.userId], {
+    type: "notification.created",
+    notification: {
+      id: notification.id,
+      issueId: notification.issueId,
+      type: notification.type,
+      message: notification.message,
+      readAt: notification.readAt?.toISOString() ?? null,
+      createdAt: notification.createdAt.toISOString(),
+    },
+  });
+}
+
+export async function issueRelatedUserIds(prisma: PrismaClient, issueId: number, additional: number[] = []) {
+  const [subscriptions, assignees] = await Promise.all([
+    prisma.subscription.findMany({ where: { issueId }, select: { userId: true } }),
+    prisma.issueAssignee.findMany({ where: { issueId }, select: { userId: true } }),
+  ]);
+  return [...new Set([...subscriptions.map(({ userId }) => userId), ...assignees.map(({ userId }) => userId), ...additional])];
 }
 
 export async function mentionIds(prisma: PrismaClient, body: string) {

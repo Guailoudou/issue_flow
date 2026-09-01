@@ -6,7 +6,10 @@ import { Readable } from "node:stream";
 import { PrismaClient } from "@prisma/client";
 import ExcelJS from "exceljs";
 import { buildApp } from "./app";
+import { API_TOKEN_PREFIX, generateApiToken, hashCredential } from "./auth";
+import { backupModelNames, normalizeBackupModelData } from "./routes/backup";
 import type { OssClient } from "./storage/oss";
+import type { WebSocket } from "ws";
 
 const prisma = new PrismaClient();
 let app: Awaited<ReturnType<typeof buildApp>>;
@@ -62,6 +65,26 @@ const mockWebDavFetch: typeof fetch = async (input, init) => {
 
 const cookieFrom = (headers: Record<string, unknown>) => String(headers["set-cookie"]).split(";")[0] ?? "";
 const json = <T>(response: { json(): unknown }) => response.json() as T;
+const nextWsEvent = <T extends { type: string }>(socket: WebSocket, predicate: (event: T) => boolean, timeoutMs = 2000) => new Promise<T>((resolve, reject) => {
+  const timeout = setTimeout(() => { socket.off("message", onMessage); reject(new Error("Timed out waiting for realtime event")); }, timeoutMs);
+  const onMessage = (data: WebSocket.RawData) => {
+    const event = JSON.parse(data.toString()) as T;
+    if (!predicate(event)) return;
+    clearTimeout(timeout);
+    socket.off("message", onMessage);
+    resolve(event);
+  };
+  socket.on("message", onMessage);
+});
+const nextWsClose = (socket: WebSocket, timeoutMs = 2000) => new Promise<number>((resolve, reject) => {
+  const timeout = setTimeout(() => { socket.off("close", onClose); reject(new Error("Timed out waiting for realtime disconnect")); }, timeoutMs);
+  const onClose = (code: number) => {
+    clearTimeout(timeout);
+    socket.off("close", onClose);
+    resolve(code);
+  };
+  socket.on("close", onClose);
+});
 const multipartImage = (contents: Buffer, mimeType: string, fileName = "image.png") => {
   const boundary = `issueflow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   return {
@@ -98,6 +121,7 @@ beforeAll(async () => {
   await prisma.yunxiaoIntegration.deleteMany();
   await prisma.ossSetting.deleteMany();
   await prisma.notification.deleteMany();
+  await prisma.issueNotificationMute.deleteMany();
   await prisma.timelineEvent.deleteMany();
   await prisma.comment.deleteMany();
   await prisma.subscription.deleteMany();
@@ -109,6 +133,8 @@ beforeAll(async () => {
   await prisma.label.deleteMany();
   await prisma.milestone.deleteMany();
   await prisma.apiToken.deleteMany();
+  await prisma.desktopPreference.deleteMany();
+  await prisma.desktopPairing.deleteMany();
   await prisma.session.deleteMany();
   await prisma.user.deleteMany();
   await prisma.platformSetting.deleteMany();
@@ -117,6 +143,29 @@ beforeAll(async () => {
 afterAll(async () => { if (app) await app.close(); await prisma.$disconnect(); if (uploadDir) await rm(uploadDir, { recursive: true, force: true }); });
 
 describe.sequential("IssueFlow API", () => {
+  it("keeps version 1 backups compatible when additive desktop models are absent", () => {
+    const currentData = Object.fromEntries(backupModelNames.map((name) => [name, []]));
+    const legacyData = { ...currentData };
+    delete legacyData.desktopPairing;
+    delete legacyData.desktopPreference;
+    delete legacyData.issueNotificationMute;
+
+    expect(normalizeBackupModelData(legacyData)).toMatchObject({
+      desktopPairing: [],
+      desktopPreference: [],
+      issueNotificationMute: [],
+    });
+
+    const missingRequired = { ...legacyData };
+    delete missingRequired.issue;
+    expect(() => normalizeBackupModelData(missingRequired)).toThrowError(
+      "Backup model set does not match this IssueFlow version",
+    );
+    expect(() => normalizeBackupModelData({ ...currentData, unexpectedModel: [] })).toThrowError(
+      "Backup model set does not match this IssueFlow version",
+    );
+  });
+
   it("bootstraps exactly one admin and rejects anonymous access", async () => {
     expect(await prisma.user.count({ where: { role: "ADMIN" } })).toBe(1);
     const publicSettings = await app.inject({ method: "GET", url: "/api/settings" });
@@ -163,20 +212,134 @@ describe.sequential("IssueFlow API", () => {
     expect(listed.body).not.toContain(result.token);
     expect(listed.body).not.toContain("tokenHash");
     expect((await prisma.apiToken.findUniqueOrThrow({ where: { id: result.apiToken.id } })).lastUsedAt).not.toBeNull();
+    const socket = await app.injectWS("/api/realtime", { headers: bearer });
+    expect(app.realtime.connectionCount(stored.userId)).toBe(1);
 
     const confused = await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: adminCookie, authorization: "Bearer invalid" } });
     expect(confused.statusCode).toBe(401);
     expect(json<{ error: { code: string } }>(confused).error.code).toBe("API_TOKEN_INVALID");
+    const revokedSocket = nextWsClose(socket);
     expect((await app.inject({ method: "DELETE", url: `/api/auth/api-tokens/${result.apiToken.id}`, headers: { cookie: adminCookie } })).statusCode).toBe(204);
+    expect(await revokedSocket).toBe(1008);
+    expect(app.realtime.connectionCount(stored.userId)).toBe(0);
     expect((await app.inject({ method: "GET", url: "/api/auth/me", headers: bearer })).statusCode).toBe(401);
 
     const expiring = await app.inject({ method: "POST", url: "/api/auth/api-tokens", headers: { cookie: adminCookie }, payload: { name: "Expired token", expiresInDays: 30 } });
     const expiredResult = json<{ token: string; apiToken: { id: number } }>(expiring);
+    const expiringSocket = await app.injectWS("/api/realtime", { headers: { authorization: `Bearer ${expiredResult.token}` } });
     await prisma.apiToken.update({ where: { id: expiredResult.apiToken.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+    const expiredSocket = nextWsClose(expiringSocket);
     const expired = await app.inject({ method: "GET", url: "/api/auth/me", headers: { authorization: `Bearer ${expiredResult.token}` } });
     expect(expired.statusCode).toBe(401);
     expect(json<{ error: { code: string } }>(expired).error.code).toBe("API_TOKEN_EXPIRED");
+    expect(await expiredSocket).toBe(1008);
     expect(await prisma.apiToken.findUnique({ where: { id: expiredResult.apiToken.id } })).toBeNull();
+  });
+
+  it("pairs a desktop through a browser session and exchanges the secret exactly once", async () => {
+    const created = await app.inject({ method: "POST", url: "/api/desktop/pairings", payload: { deviceName: "Admin MacBook" } });
+    expect(created.statusCode).toBe(201);
+    const pairing = json<{ pairingId: string; deviceSecret: string; userCode: string; verificationUrl: string; expiresAt: string; pollIntervalSeconds: number }>(created);
+    expect(pairing.pairingId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(pairing.deviceSecret).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(pairing.userCode).toMatch(/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/);
+    expect(pairing.verificationUrl).toContain(encodeURIComponent(pairing.userCode));
+
+    const pending = await app.inject({ method: "POST", url: `/api/desktop/pairings/${pairing.pairingId}/exchange`, payload: { deviceSecret: pairing.deviceSecret } });
+    expect(pending.statusCode).toBe(202);
+    expect(json<{ status: string; retryAfterSeconds: number }>(pending)).toMatchObject({ status: "PENDING", retryAfterSeconds: 5 });
+
+    const anonymousVerify = await app.inject({ method: "GET", url: `/api/desktop/pairings/verify?code=${encodeURIComponent(pairing.userCode)}` });
+    expect(anonymousVerify.statusCode).toBe(401);
+    const bearerCannotApprove = await app.inject({ method: "POST", url: "/api/desktop/pairings/approve", headers: { cookie: adminCookie, authorization: "Bearer invalid" }, payload: { code: pairing.userCode } });
+    expect(bearerCannotApprove.statusCode).toBe(401);
+    expect(json<{ error: { code: string } }>(bearerCannotApprove).error.code).toBe("SESSION_REQUIRED");
+
+    const verify = await app.inject({ method: "GET", url: `/api/desktop/pairings/verify?code=${encodeURIComponent(pairing.userCode)}`, headers: { cookie: adminCookie } });
+    expect(verify.statusCode).toBe(200);
+    expect(json<{ deviceName: string; approvedAt: null }>(verify)).toMatchObject({ deviceName: "Admin MacBook", approvedAt: null });
+    const approved = await app.inject({ method: "POST", url: "/api/desktop/pairings/approve", headers: { cookie: adminCookie }, payload: { code: pairing.userCode } });
+    expect(approved.statusCode).toBe(200);
+    const approval = json<{ pairingId: string; status: string; approvedAt: string }>(approved);
+    expect(approval.status).toBe("APPROVED");
+    const approvedAgain = await app.inject({ method: "POST", url: "/api/desktop/pairings/approve", headers: { cookie: adminCookie }, payload: { code: pairing.userCode.toLowerCase().replace("-", " ") } });
+    expect(approvedAgain.statusCode).toBe(200);
+    expect(json<{ pairingId: string; status: string; approvedAt: string }>(approvedAgain)).toEqual(approval);
+
+    const exchanges = await Promise.all([
+      app.inject({ method: "POST", url: `/api/desktop/pairings/${pairing.pairingId}/exchange`, payload: { deviceSecret: pairing.deviceSecret } }),
+      app.inject({ method: "POST", url: `/api/desktop/pairings/${pairing.pairingId}/exchange`, payload: { deviceSecret: pairing.deviceSecret } }),
+    ]);
+    expect(exchanges.map(({ statusCode }) => statusCode).sort((a, b) => a - b)).toEqual([200, 410]);
+    const exchanged = exchanges.find(({ statusCode }) => statusCode === 200)!;
+    expect(exchanged.statusCode).toBe(200);
+    const authorized = json<{ status: string; token: string; apiToken: { id: number; kind: string; deviceName: string; prefix: string } }>(exchanged);
+    expect(authorized).toMatchObject({ status: "AUTHORIZED", apiToken: { kind: "DESKTOP", deviceName: "Admin MacBook", prefix: authorized.token.slice(0, 12) } });
+    expect((await app.inject({ method: "GET", url: "/api/auth/me", headers: { authorization: `Bearer ${authorized.token}` } })).statusCode).toBe(200);
+    const stored = await prisma.apiToken.findUniqueOrThrow({ where: { id: authorized.apiToken.id } });
+    expect(stored).toMatchObject({ kind: "DESKTOP", deviceName: "Admin MacBook" });
+    expect(stored.tokenHash).not.toContain(authorized.token);
+    const repeated = await app.inject({ method: "POST", url: `/api/desktop/pairings/${pairing.pairingId}/exchange`, payload: { deviceSecret: pairing.deviceSecret } });
+    expect(repeated.statusCode).toBe(410);
+  });
+
+  it("isolates desktop pairing limits by forwarded client IP behind one trusted proxy", async () => {
+    const proxiedApp = await buildApp({ prisma, trustProxyHops: 1 });
+    try {
+      for (let index = 0; index < 30; index += 1) {
+        const response = await proxiedApp.inject({
+          method: "POST",
+          url: "/api/desktop/pairings",
+          headers: { "x-forwarded-for": "198.51.100.10" },
+          payload: { deviceName: `Rate-limited Mac ${index}` },
+        });
+        expect(response.statusCode).toBe(201);
+      }
+      expect((await proxiedApp.inject({
+        method: "POST",
+        url: "/api/desktop/pairings",
+        headers: { "x-forwarded-for": "198.51.100.10" },
+        payload: { deviceName: "Rate-limited Mac blocked" },
+      })).statusCode).toBe(429);
+      expect((await proxiedApp.inject({
+        method: "POST",
+        url: "/api/desktop/pairings",
+        headers: { "x-forwarded-for": "203.0.113.20" },
+        payload: { deviceName: "Independent team member" },
+      })).statusCode).toBe(201);
+    } finally {
+      await proxiedApp.close();
+    }
+  });
+
+  it("isolates desktop pairing limits behind an external TLS proxy and Compose Nginx", async () => {
+    const proxiedApp = await buildApp({ prisma, trustProxyHops: 2 });
+    const externalProxy = "192.0.2.44";
+    try {
+      for (let index = 0; index < 30; index += 1) {
+        const response = await proxiedApp.inject({
+          method: "POST",
+          url: "/api/desktop/pairings",
+          headers: { "x-forwarded-for": `198.51.100.30, ${externalProxy}` },
+          payload: { deviceName: `Two-proxy Mac ${index}` },
+        });
+        expect(response.statusCode).toBe(201);
+      }
+      expect((await proxiedApp.inject({
+        method: "POST",
+        url: "/api/desktop/pairings",
+        headers: { "x-forwarded-for": `198.51.100.30, ${externalProxy}` },
+        payload: { deviceName: "Two-proxy Mac blocked" },
+      })).statusCode).toBe(429);
+      expect((await proxiedApp.inject({
+        method: "POST",
+        url: "/api/desktop/pairings",
+        headers: { "x-forwarded-for": `203.0.113.40, ${externalProxy}` },
+        payload: { deviceName: "Independent two-proxy member" },
+      })).statusCode).toBe(201);
+    } finally {
+      await proxiedApp.close();
+    }
   });
 
   it("updates a personal display name and securely changes the password", async () => {
@@ -187,6 +350,7 @@ describe.sequential("IssueFlow API", () => {
     const cookie = cookieFrom(login.headers);
     const tokenResponse = await app.inject({ method: "POST", url: "/api/auth/api-tokens", headers: { cookie }, payload: { name: "Profile token", expiresInDays: 30 } });
     const token = json<{ token: string }>(tokenResponse).token;
+    const socket = await app.injectWS("/api/realtime", { headers: { authorization: `Bearer ${token}` } });
 
     const profile = await app.inject({ method: "PATCH", url: "/api/auth/profile", headers: { cookie }, payload: { displayName: "  Updated Profile  " } });
     expect(profile.statusCode).toBe(200);
@@ -194,9 +358,13 @@ describe.sequential("IssueFlow API", () => {
     const wrong = await app.inject({ method: "POST", url: "/api/auth/change-password", headers: { cookie }, payload: { currentPassword: "wrong-password", newPassword: "new-profile-password" } });
     expect(wrong.statusCode).toBe(400);
     expect(json<{ error: { code: string } }>(wrong).error.code).toBe("CURRENT_PASSWORD_INVALID");
+    expect(app.realtime.connectionCount(userId)).toBe(1);
 
+    const disconnected = nextWsClose(socket);
     const changed = await app.inject({ method: "POST", url: "/api/auth/change-password", headers: { cookie }, payload: { currentPassword: "profile-password", newPassword: "new-profile-password" } });
     expect(changed.statusCode).toBe(200);
+    expect(await disconnected).toBe(1008);
+    expect(app.realtime.connectionCount(userId)).toBe(0);
     expect((await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie } })).statusCode).toBe(401);
     expect((await app.inject({ method: "GET", url: "/api/auth/me", headers: { authorization: `Bearer ${token}` } })).statusCode).toBe(401);
     expect((await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "profile-user", password: "profile-password" } })).statusCode).toBe(401);
@@ -211,6 +379,36 @@ describe.sequential("IssueFlow API", () => {
     const selfRename = await app.inject({ method: "PATCH", url: `/api/admin/users/${admin.id}`, headers: { cookie: adminCookie }, payload: { username: "renamed-admin" } });
     expect(selfRename.statusCode).toBe(409);
     expect(json<{ error: { code: string } }>(selfRename).error.code).toBe("ADMIN_SELF_RENAME_FORBIDDEN");
+  });
+
+  it("disconnects realtime clients after an admin resets or deletes their user", async () => {
+    const connectedUser = async (username: string) => {
+      const user = await prisma.user.create({ data: { username, passwordHash: "unused", displayName: username } });
+      const token = generateApiToken();
+      await prisma.apiToken.create({ data: {
+        userId: user.id,
+        name: `${username} token`,
+        tokenHash: hashCredential(token),
+        tokenPrefix: token.slice(0, API_TOKEN_PREFIX.length + 8),
+      } });
+      const socket = await app.injectWS("/api/realtime", { headers: { authorization: `Bearer ${token}` } });
+      return { user, socket };
+    };
+
+    const resetTarget = await connectedUser("realtime-reset-target");
+    const resetDisconnect = nextWsClose(resetTarget.socket);
+    const reset = await app.inject({ method: "POST", url: `/api/admin/users/${resetTarget.user.id}/reset-password`, headers: { cookie: adminCookie }, payload: { password: "replacement-password" } });
+    expect(reset.statusCode).toBe(200);
+    expect(await resetDisconnect).toBe(1008);
+    expect(app.realtime.connectionCount(resetTarget.user.id)).toBe(0);
+
+    const deleteTarget = await connectedUser("realtime-delete-target");
+    const deleteDisconnect = nextWsClose(deleteTarget.socket);
+    const deleted = await app.inject({ method: "DELETE", url: `/api/admin/users/${deleteTarget.user.id}`, headers: { cookie: adminCookie } });
+    expect(deleted.statusCode).toBe(200);
+    expect(await deleteDisconnect).toBe(1008);
+    expect(app.realtime.connectionCount(deleteTarget.user.id)).toBe(0);
+    expect(await prisma.user.findUnique({ where: { id: deleteTarget.user.id } })).toBeNull();
   });
 
   it("registers a normal user only with the configured invitation code and starts a session", async () => {
@@ -291,6 +489,52 @@ describe.sequential("IssueFlow API", () => {
     userBApiToken = json<{ token: string }>(bobToken).token;
   });
 
+  it("authenticates realtime connections with Bearer only and isolates events by user", async () => {
+    await expect(app.injectWS("/api/realtime", { headers: { cookie: userBCookie } })).rejects.toThrow();
+    const socket = await app.injectWS("/api/realtime", { headers: { authorization: `Bearer ${userBApiToken}` } });
+    expect(app.realtime.connectionCount(userBId)).toBe(1);
+    const notificationPromise = nextWsEvent<{ type: string; notification: { issueId: number | null; type: string } }>(socket, (event) => event.type === "notification.created");
+    const issuePromise = nextWsEvent<{ type: string; issueId: number; actorId: number }>(socket, (event) => event.type === "issue.changed");
+    const created = await app.inject({ method: "POST", url: "/api/issues", headers: { cookie: userACookie }, payload: { title: "Realtime assignment", assigneeIds: [userBId] } });
+    expect(created.statusCode).toBe(201);
+    const notificationEvent = await notificationPromise;
+    expect(notificationEvent.notification).toMatchObject({ issueId: json<{ id: number }>(created).id, type: "ASSIGNED" });
+    const issueEvent = await issuePromise;
+    expect(issueEvent).toMatchObject({ issueId: json<{ id: number }>(created).id, actorId: userAId });
+    socket.close();
+  });
+
+  it("publishes issue.changed to the comment author's other device for create, edit and delete", async () => {
+    const created = await app.inject({ method: "POST", url: "/api/issues", headers: { cookie: userBCookie }, payload: { title: "Comment realtime synchronization" } });
+    expect(created.statusCode).toBe(201);
+    const commentIssueId = json<{ id: number }>(created).id;
+    const socket = await app.injectWS("/api/realtime", { headers: { authorization: `Bearer ${userBApiToken}` } });
+
+    const createdEvent = nextWsEvent<{ type: string; issueId: number; actorId: number; updatedAt: string }>(socket, (event) => event.type === "issue.changed" && event.issueId === commentIssueId);
+    const commentResponse = await app.inject({ method: "POST", url: `/api/issues/${commentIssueId}/comments`, headers: { cookie: userBCookie }, payload: { body: "Created from the browser" } });
+    expect(commentResponse.statusCode).toBe(201);
+    const comment = json<{ id: number; updatedAt: string }>(commentResponse);
+    const commentCreatedEvent = await createdEvent;
+    expect(commentCreatedEvent).toMatchObject({ issueId: commentIssueId, actorId: userBId });
+    expect(commentCreatedEvent.updatedAt).toBe((await prisma.issue.findUniqueOrThrow({ where: { id: commentIssueId } })).updatedAt.toISOString());
+
+    const editedEvent = nextWsEvent<{ type: string; issueId: number; actorId: number; updatedAt: string }>(socket, (event) => event.type === "issue.changed" && event.issueId === commentIssueId);
+    const edited = await app.inject({ method: "PATCH", url: `/api/comments/${comment.id}`, headers: { cookie: userBCookie }, payload: { body: "Edited from the browser", updatedAt: comment.updatedAt } });
+    expect(edited.statusCode).toBe(200);
+    const commentEditedEvent = await editedEvent;
+    expect(commentEditedEvent).toMatchObject({ issueId: commentIssueId, actorId: userBId });
+    expect(commentEditedEvent.updatedAt).toBe((await prisma.issue.findUniqueOrThrow({ where: { id: commentIssueId } })).updatedAt.toISOString());
+
+    const deletedEvent = nextWsEvent<{ type: string; issueId: number; actorId: number; updatedAt: string }>(socket, (event) => event.type === "issue.changed" && event.issueId === commentIssueId);
+    const deleted = await app.inject({ method: "DELETE", url: `/api/comments/${comment.id}`, headers: { cookie: userBCookie } });
+    expect(deleted.statusCode).toBe(200);
+    const commentDeletedEvent = await deletedEvent;
+    expect(commentDeletedEvent).toMatchObject({ issueId: commentIssueId, actorId: userBId });
+    expect(commentDeletedEvent.updatedAt).toBe((await prisma.issue.findUniqueOrThrow({ where: { id: commentIssueId } })).updatedAt.toISOString());
+    expect(await prisma.notification.count({ where: { issueId: commentIssueId, userId: userBId } })).toBe(0);
+    socket.close();
+  });
+
   it("creates an assigned issue with timeline, subscription and notification", async () => {
     const label = await app.inject({ method: "POST", url: "/api/admin/labels", headers: { cookie: adminCookie }, payload: { name: "bug", description: "Bug", color: "d73a4a" } });
     const labelId = json<{ id: number }>(label).id;
@@ -317,6 +561,94 @@ describe.sequential("IssueFlow API", () => {
     expect(json<{ count: number }>(response).count).toBe(3);
     expect(await prisma.notification.count({ where: { issueId, userId: userBId, readAt: null } })).toBe(0);
     expect(await prisma.notification.count({ where: { issueId, userId: userAId, readAt: null } })).toBe(1);
+  });
+
+  it("builds the desktop overview, auto-follows mentions and synchronizes preferences, mute and read state", async () => {
+    const assignedResponse = await app.inject({ method: "POST", url: "/api/issues", headers: { cookie: userACookie }, payload: { title: "Desktop assigned", body: "A **compact** desktop summary", assigneeIds: [userBId] } });
+    const assigned = json<{ id: number; updatedAt: string }>(assignedResponse);
+    const initial = json<{ sections: { assignedOpen: Array<{ id: number; relationReasons: string[] }> } }>(await app.inject({ method: "GET", url: "/api/desktop/overview", headers: { cookie: userBCookie } }));
+    expect(initial.sections.assignedOpen).toContainEqual(expect.objectContaining({ id: assigned.id, relationReasons: expect.arrayContaining(["ASSIGNED", "FOLLOWING"]) }));
+
+    const unassigned = await app.inject({ method: "PATCH", url: `/api/issues/${assigned.id}`, headers: { cookie: userACookie }, payload: { assigneeIds: [], updatedAt: assigned.updatedAt } });
+    expect(unassigned.statusCode).toBe(200);
+    const afterUnassign = json<{ sections: { assignedOpen: Array<{ id: number }>; followedOpen: Array<{ id: number }> } }>(await app.inject({ method: "GET", url: "/api/desktop/overview", headers: { cookie: userBCookie } }));
+    expect(afterUnassign.sections.assignedOpen.map(({ id }) => id)).not.toContain(assigned.id);
+    expect(afterUnassign.sections.followedOpen.map(({ id }) => id)).toContain(assigned.id);
+
+    const mentionedIssue = json<{ id: number }>(await app.inject({ method: "POST", url: "/api/issues", headers: { cookie: userACookie }, payload: { title: "Desktop mention" } }));
+    const mentioned = await app.inject({ method: "POST", url: `/api/issues/${mentionedIssue.id}/comments`, headers: { cookie: userACookie }, payload: { body: "Please review this @bob" } });
+    expect(mentioned.statusCode).toBe(201);
+    expect(await prisma.subscription.count({ where: { issueId: mentionedIssue.id, userId: userBId } })).toBe(1);
+    expect(await prisma.notification.count({ where: { issueId: mentionedIssue.id, userId: userBId, type: "MENTIONED" } })).toBe(1);
+    const mentionedOverview = json<{ sections: { followedOpen: Array<{ id: number; relationReasons: string[]; unreadCount: number }> } }>(await app.inject({ method: "GET", url: "/api/desktop/overview", headers: { cookie: userBCookie } }));
+    expect(mentionedOverview.sections.followedOpen).toContainEqual(expect.objectContaining({ id: mentionedIssue.id, relationReasons: expect.arrayContaining(["MENTIONED", "FOLLOWING"]), unreadCount: 1 }));
+
+    const muteSocket = await app.injectWS("/api/realtime", { headers: { authorization: `Bearer ${userBApiToken}` } });
+    const mutedEvent = nextWsEvent<{ type: string; issueId: number; muted: boolean }>(muteSocket, (event) => event.type === "notification-mute.changed");
+    const muted = await app.inject({ method: "PUT", url: `/api/issues/${mentionedIssue.id}/notification-mute`, headers: { cookie: userBCookie } });
+    expect(json<{ muted: boolean }>(muted).muted).toBe(true);
+    await expect(mutedEvent).resolves.toMatchObject({ issueId: mentionedIssue.id, muted: true });
+    expect(json<{ issueIds: number[] }>(await app.inject({ method: "GET", url: "/api/desktop/notification-mutes", headers: { cookie: userBCookie } })).issueIds).toContain(mentionedIssue.id);
+    expect(json<{ issueIds: number[] }>(await app.inject({ method: "GET", url: "/api/desktop/notification-mutes", headers: { cookie: userACookie } })).issueIds).not.toContain(mentionedIssue.id);
+    expect(json<{ sections: { followedOpen: Array<{ id: number; muted: boolean }> } }>(await app.inject({ method: "GET", url: "/api/desktop/overview", headers: { cookie: userBCookie } })).sections.followedOpen).toContainEqual(expect.objectContaining({ id: mentionedIssue.id, muted: true }));
+    const aliceUnmute = await app.inject({ method: "DELETE", url: `/api/issues/${mentionedIssue.id}/notification-mute`, headers: { cookie: userACookie } });
+    expect(json<{ muted: boolean }>(aliceUnmute).muted).toBe(false);
+    expect(await prisma.issueNotificationMute.count({ where: { issueId: mentionedIssue.id, userId: userBId } })).toBe(1);
+
+    const invalidDnd = await app.inject({ method: "PATCH", url: "/api/desktop/preferences", headers: { cookie: userBCookie }, payload: { doNotDisturbEnabled: true } });
+    expect(invalidDnd.statusCode).toBe(400);
+    expect(json<{ error: { code: string } }>(invalidDnd).error.code).toBe("INVALID_DO_NOT_DISTURB");
+    const invalidTimeZone = await app.inject({ method: "PATCH", url: "/api/desktop/preferences", headers: { cookie: userBCookie }, payload: { timeZone: "Mars/Olympus" } });
+    expect(invalidTimeZone.statusCode).toBe(400);
+    expect(json<{ error: { code: string } }>(invalidTimeZone).error.code).toBe("INVALID_TIME_ZONE");
+    const preferences = await app.inject({ method: "PATCH", url: "/api/desktop/preferences", headers: { cookie: userBCookie }, payload: { doNotDisturbEnabled: true, doNotDisturbStart: "22:00", doNotDisturbEnd: "08:00", timeZone: "Asia/Shanghai", recentlyClosedDays: 14 } });
+    expect(preferences.statusCode).toBe(200);
+    expect(json<{ doNotDisturbEnabled: boolean; timeZone: string; recentlyClosedDays: number }>(preferences)).toMatchObject({ doNotDisturbEnabled: true, timeZone: "Asia/Shanghai", recentlyClosedDays: 14 });
+
+    const aliceUnread = await prisma.notification.create({ data: { userId: userAId, issueId: mentionedIssue.id, type: "TEST", message: "Alice stays unread" } });
+    const marked = await app.inject({ method: "PATCH", url: `/api/issues/${mentionedIssue.id}/notifications/read`, headers: { cookie: userBCookie } });
+    expect(json<{ count: number }>(marked).count).toBe(1);
+    expect((await prisma.notification.findUniqueOrThrow({ where: { id: aliceUnread.id } })).readAt).toBeNull();
+    const afterRead = json<{ sections: { followedOpen: Array<{ id: number; unreadCount: number }> } }>(await app.inject({ method: "GET", url: "/api/desktop/overview", headers: { cookie: userBCookie } }));
+    expect(afterRead.sections.followedOpen).toContainEqual(expect.objectContaining({ id: mentionedIssue.id, unreadCount: 0 }));
+
+    const closed = await app.inject({ method: "PATCH", url: `/api/issues/${assigned.id}`, headers: { cookie: userACookie }, payload: { state: "CLOSED", updatedAt: json<{ updatedAt: string }>(unassigned).updatedAt } });
+    expect(closed.statusCode).toBe(200);
+    const closedOverview = json<{ sections: { recentlyClosed: Array<{ id: number }> } }>(await app.inject({ method: "GET", url: "/api/desktop/overview", headers: { cookie: userBCookie } }));
+    expect(closedOverview.sections.recentlyClosed.map(({ id }) => id)).toContain(assigned.id);
+
+    const unmutedEvent = nextWsEvent<{ type: string; issueId: number; muted: boolean }>(muteSocket, (event) => event.type === "notification-mute.changed");
+    const unmuted = await app.inject({ method: "DELETE", url: `/api/issues/${mentionedIssue.id}/notification-mute`, headers: { cookie: userBCookie } });
+    expect(json<{ muted: boolean }>(unmuted).muted).toBe(false);
+    await expect(unmutedEvent).resolves.toMatchObject({ issueId: mentionedIssue.id, muted: false });
+    expect(json<{ issueIds: number[] }>(await app.inject({ method: "GET", url: "/api/desktop/notification-mutes", headers: { cookie: userBCookie } })).issueIds).not.toContain(mentionedIssue.id);
+    muteSocket.close();
+  });
+
+  it("prioritizes unread desktop issues before applying the section limit", async () => {
+    const createdUser = await app.inject({ method: "POST", url: "/api/admin/users", headers: { cookie: adminCookie }, payload: { username: "desktop-sort", password: "desktop-sort-password", displayName: "Desktop Sort" } });
+    expect(createdUser.statusCode).toBe(201);
+    const sortUserId = json<{ user: { id: number } }>(createdUser).user.id;
+    const login = await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "desktop-sort", password: "desktop-sort-password" } });
+    const sortUserCookie = cookieFrom(login.headers);
+    const createAssigned = async (title: string) => {
+      const response = await app.inject({ method: "POST", url: "/api/issues", headers: { cookie: userACookie }, payload: { title, assigneeIds: [sortUserId] } });
+      expect(response.statusCode).toBe(201);
+      return json<{ id: number }>(response);
+    };
+    const oldestUnread = await createAssigned("Desktop order oldest unread");
+    const middleRead = await createAssigned("Desktop order middle read");
+    const newestRead = await createAssigned("Desktop order newest read");
+    expect((await app.inject({ method: "PATCH", url: `/api/issues/${middleRead.id}/notifications/read`, headers: { cookie: sortUserCookie } })).statusCode).toBe(200);
+    expect((await app.inject({ method: "PATCH", url: `/api/issues/${newestRead.id}/notifications/read`, headers: { cookie: sortUserCookie } })).statusCode).toBe(200);
+
+    const overview = json<{ sections: { assignedOpen: Array<{ id: number; unreadCount: number }> }; totals: { assignedOpen: number } }>(await app.inject({ method: "GET", url: "/api/desktop/overview?limit=2", headers: { cookie: sortUserCookie } }));
+    expect(overview.totals.assignedOpen).toBe(3);
+    expect(overview.sections.assignedOpen).toHaveLength(2);
+    expect(overview.sections.assignedOpen).toEqual([
+      expect.objectContaining({ id: oldestUnread.id, unreadCount: 1 }),
+      expect.objectContaining({ id: newestRead.id, unreadCount: 0 }),
+    ]);
   });
 
   it("records precise title changes and skips vague no-op edit events", async () => {
@@ -367,6 +699,22 @@ describe.sequential("IssueFlow API", () => {
 
     let releaseAiFetch = () => {};
     aiFetchGate = new Promise<void>((resolve) => { releaseAiFetch = resolve; });
+    const aiRealtimeToken = generateApiToken();
+    const aiRealtimeApiToken = await prisma.apiToken.create({ data: {
+      userId: userAId,
+      name: "AI realtime test",
+      tokenHash: hashCredential(aiRealtimeToken),
+      tokenPrefix: aiRealtimeToken.slice(0, API_TOKEN_PREFIX.length + 8),
+    } });
+    const aiRealtimeSocket = await app.injectWS("/api/realtime", { headers: { authorization: `Bearer ${aiRealtimeToken}` } });
+    const aiIssueEvents: Array<{ type: string; issueId: number; updatedAt: string; actorId: number }> = [];
+    const collectAiIssueEvents = (data: WebSocket.RawData) => {
+      const event = JSON.parse(data.toString()) as { type: string; issueId?: number; updatedAt?: string; actorId?: number };
+      if (event.type === "issue.changed" && event.issueId !== undefined && event.updatedAt && event.actorId !== undefined) {
+        aiIssueEvents.push(event as { type: string; issueId: number; updatedAt: string; actorId: number });
+      }
+    };
+    aiRealtimeSocket.on("message", collectAiIssueEvents);
     const response = await app.inject({ method: "POST", url: "/api/issues", headers: { cookie: userACookie }, payload: { title: "AI label request", body: "Visible description\n![secret](https://files.example.com/private.png)\n<img src=\"https://files.example.com/other.png\">\n![reference][shot]\n[shot]: https://files.example.com/reference.png" } });
     expect(response.statusCode).toBe(201);
     expect(json<{ labels: unknown[] }>(response).labels).toEqual([]);
@@ -384,6 +732,15 @@ describe.sequential("IssueFlow API", () => {
     aiFetchGate = null;
     const createdIssueId = json<{ id: number }>(response).id;
     await vi.waitFor(async () => expect(await prisma.issueLabel.count({ where: { issueId: createdIssueId } })).toBe(1));
+    await vi.waitFor(() => expect(aiIssueEvents.filter(({ issueId }) => issueId === createdIssueId)).toHaveLength(2));
+    const aiLabeledIssue = await prisma.issue.findUniqueOrThrow({ where: { id: createdIssueId } });
+    expect(aiIssueEvents.filter(({ issueId }) => issueId === createdIssueId).at(-1)).toMatchObject({
+      actorId: userAId,
+      updatedAt: aiLabeledIssue.updatedAt.toISOString(),
+    });
+    aiRealtimeSocket.off("message", collectAiIssueEvents);
+    aiRealtimeSocket.close();
+    await prisma.apiToken.delete({ where: { id: aiRealtimeApiToken.id } });
 
     await app.inject({ method: "PUT", url: "/api/admin/settings", headers: { cookie: adminCookie }, payload: {
       name: "IssueFlow", description: "", logoUrl: "", defaultPageSize: 20, allowUserCreateIssue: true,
@@ -605,8 +962,12 @@ describe.sequential("IssueFlow API", () => {
   it("combines filters and invalidates a disabled user's sessions", async () => {
     const filtered = await app.inject({ method: "GET", url: `/api/issues?state=CLOSED&assigneeId=${userBId}&q=Broken`, headers: { cookie: userACookie } });
     expect(json<{ pagination: { total: number } }>(filtered).pagination.total).toBe(1);
+    const socket = await app.injectWS("/api/realtime", { headers: { authorization: `Bearer ${userBApiToken}` } });
+    const disconnected = nextWsClose(socket);
     const disabled = await app.inject({ method: "PATCH", url: `/api/admin/users/${userBId}`, headers: { cookie: adminCookie }, payload: { active: false } });
     expect(disabled.statusCode).toBe(200);
+    expect(await disconnected).toBe(1008);
+    expect(app.realtime.connectionCount(userBId)).toBe(0);
     const me = await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: userBCookie } });
     expect(me.statusCode).toBe(401);
     expect(await prisma.apiToken.count({ where: { userId: userBId } })).toBe(0);
@@ -800,6 +1161,9 @@ describe.sequential("IssueFlow API", () => {
 
   it("exports every model and attachment, then overwrites all platform data on import", async () => {
     expect((await app.inject({ method: "GET", url: "/api/admin/backup/export", headers: { cookie: userACookie } })).statusCode).toBe(403);
+    const realtimeTokenResponse = await app.inject({ method: "POST", url: "/api/auth/api-tokens", headers: { cookie: adminCookie }, payload: { name: "Backup realtime", expiresInDays: 30 } });
+    const realtimeToken = json<{ token: string }>(realtimeTokenResponse).token;
+    const socket = await app.injectWS("/api/realtime", { headers: { authorization: `Bearer ${realtimeToken}` } });
     const attachment = await prisma.issueAttachment.findFirstOrThrow();
     const originalContent = await app.inject({ method: "GET", url: `/api/attachments/${attachment.id}/content`, headers: { cookie: adminCookie } });
     const issueCount = await prisma.issue.count();
@@ -809,14 +1173,17 @@ describe.sequential("IssueFlow API", () => {
     expect(exported.headers["cache-control"]).toBe("private, no-store");
     const backup = JSON.parse(exported.body) as { format: string; data: Record<string, unknown[]>; attachmentContents: unknown[] };
     expect(backup.format).toBe("issueflow-backup");
-    expect(Object.keys(backup.data)).toHaveLength(21);
+    expect(Object.keys(backup.data)).toHaveLength(24);
     expect(backup.attachmentContents).toHaveLength(await prisma.issueAttachment.count());
 
     const marker = await prisma.issue.create({ data: { title: "must disappear after restore", authorId: userAId } });
     const body = multipartBackup(exported.rawPayload);
     expect((await app.inject({ method: "POST", url: "/api/admin/backup/import", headers: { ...body.headers, cookie: adminCookie }, payload: body.payload })).statusCode).toBe(400);
+    const disconnected = nextWsClose(socket);
     const imported = await app.inject({ method: "POST", url: "/api/admin/backup/import?confirm=OVERWRITE", headers: { ...body.headers, cookie: adminCookie }, payload: body.payload });
     expect(imported.statusCode).toBe(200);
+    expect(await disconnected).toBe(1008);
+    expect(app.realtime.connectionCount()).toBe(0);
     expect(await prisma.issue.findUnique({ where: { id: marker.id } })).toBeNull();
     expect(await prisma.issue.count()).toBe(issueCount);
     const restoredAttachment = await prisma.issueAttachment.findUniqueOrThrow({ where: { id: attachment.id } });

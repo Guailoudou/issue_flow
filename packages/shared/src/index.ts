@@ -6,6 +6,9 @@ export const ISSUE_STATES = ["OPEN", "CLOSED"] as const;
 export const MILESTONE_STATES = ["OPEN", "CLOSED"] as const;
 export const SORT_FIELDS = ["createdAt", "updatedAt"] as const;
 export const YUNXIAO_EDITIONS = ["CENTRAL", "REGION"] as const;
+export const API_TOKEN_KINDS = ["PERSONAL", "DESKTOP"] as const;
+export const DESKTOP_RELATION_REASONS = ["ASSIGNED", "MENTIONED", "FOLLOWING"] as const;
+export const DESKTOP_RECENTLY_CLOSED_DAYS = [3, 7, 14, 30] as const;
 
 export const usernameSchema = z.string().trim().min(3).max(40).regex(/^[a-zA-Z0-9_-]+$/);
 export const passwordSchema = z.string().min(8).max(128);
@@ -178,6 +181,151 @@ export const ossSettingSchema = z.object({
   if (value.clearWebdavCredentials && (value.webdavUsername || value.webdavPassword)) context.addIssue({ code: "custom", path: ["clearWebdavCredentials"], message: "Cannot set and clear WebDAV credentials at the same time" });
 });
 
+const isoDateTimeSchema = z.string().datetime();
+const nullableIsoDateTimeSchema = isoDateTimeSchema.nullable();
+const desktopDeviceNameSchema = z.string().trim().min(1).max(100);
+const desktopPairingCodeSchema = z.string().trim().transform((value) => value.replace(/[\s-]/g, "").toUpperCase()).refine((value) => /^[A-HJ-NP-Z2-9]{8}$/.test(value), "Invalid pairing code");
+const desktopPairingIdSchema = z.string().uuid();
+const desktopDeviceSecretSchema = z.string().min(43).max(128).regex(/^[A-Za-z0-9_-]+$/);
+
+export const createDesktopPairingSchema = z.object({
+  deviceName: desktopDeviceNameSchema,
+});
+export const desktopPairingCreateResponseSchema = z.object({
+  pairingId: desktopPairingIdSchema,
+  deviceSecret: desktopDeviceSecretSchema,
+  userCode: z.string().regex(/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/),
+  verificationUrl: z.string().url().max(2000),
+  expiresAt: isoDateTimeSchema,
+  pollIntervalSeconds: z.number().int().min(1).max(60),
+});
+export const desktopPairingVerifyQuerySchema = z.object({ code: desktopPairingCodeSchema });
+export const desktopPairingVerificationSchema = z.object({
+  pairingId: desktopPairingIdSchema,
+  deviceName: desktopDeviceNameSchema,
+  expiresAt: isoDateTimeSchema,
+  approvedAt: nullableIsoDateTimeSchema,
+  consumedAt: nullableIsoDateTimeSchema,
+});
+export const desktopPairingApprovalSchema = z.object({ code: desktopPairingCodeSchema });
+export const desktopPairingApprovalResponseSchema = z.object({
+  pairingId: desktopPairingIdSchema,
+  status: z.literal("APPROVED"),
+  approvedAt: isoDateTimeSchema,
+});
+export const desktopPairingExchangeSchema = z.object({ deviceSecret: desktopDeviceSecretSchema });
+
+export const desktopApiTokenSchema = z.object({
+  id: idSchema,
+  name: z.string().min(1).max(100),
+  prefix: z.string().min(1).max(100),
+  kind: z.literal("DESKTOP"),
+  deviceName: desktopDeviceNameSchema.nullable(),
+  expiresAt: nullableIsoDateTimeSchema,
+  createdAt: isoDateTimeSchema,
+});
+export const desktopPairingExchangeResponseSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("PENDING"),
+    expiresAt: isoDateTimeSchema,
+    retryAfterSeconds: z.number().int().min(1).max(60),
+  }),
+  z.object({
+    status: z.literal("AUTHORIZED"),
+    token: z.string().min(1).max(4000),
+    apiToken: desktopApiTokenSchema,
+  }),
+]);
+
+export const desktopNotificationSchema = z.object({
+  id: idSchema,
+  issueId: idSchema.nullable(),
+  type: z.string().min(1).max(100),
+  message: z.string().max(10_000),
+  readAt: nullableIsoDateTimeSchema,
+  createdAt: isoDateTimeSchema,
+});
+export const desktopUserSummarySchema = z.object({
+  id: idSchema,
+  username: z.string().min(1).max(40),
+  displayName: z.string().min(1).max(80),
+});
+export const desktopLabelSummarySchema = z.object({
+  id: idSchema,
+  name: z.string().min(1).max(50),
+  color: z.string().regex(/^[0-9a-fA-F]{6}$/),
+});
+export const desktopIssueSummarySchema = z.object({
+  id: idSchema,
+  title: z.string().min(1).max(200),
+  state: z.enum(ISSUE_STATES),
+  bodyExcerpt: z.string().max(2000),
+  updatedAt: isoDateTimeSchema,
+  closedAt: nullableIsoDateTimeSchema,
+  relationReasons: z.array(z.enum(DESKTOP_RELATION_REASONS)).min(1).max(DESKTOP_RELATION_REASONS.length),
+  assignees: z.array(desktopUserSummarySchema).max(40),
+  labels: z.array(desktopLabelSummarySchema).max(2),
+  additionalLabelCount: z.number().int().nonnegative(),
+  unreadCount: z.number().int().nonnegative(),
+  subscribed: z.boolean(),
+  muted: z.boolean(),
+  latestNotification: desktopNotificationSchema.nullable(),
+});
+export const desktopOverviewSchema = z.object({
+  generatedAt: isoDateTimeSchema,
+  unreadCount: z.number().int().nonnegative(),
+  sections: z.object({
+    assignedOpen: z.array(desktopIssueSummarySchema).max(50),
+    followedOpen: z.array(desktopIssueSummarySchema).max(50),
+    recentlyClosed: z.array(desktopIssueSummarySchema).max(50),
+  }),
+  totals: z.object({
+    assignedOpen: z.number().int().nonnegative(),
+    followedOpen: z.number().int().nonnegative(),
+    recentlyClosed: z.number().int().nonnegative(),
+  }),
+});
+
+const desktopPreferenceFields = {
+  systemNotificationsEnabled: z.boolean(),
+  assignmentNotificationsEnabled: z.boolean(),
+  mentionNotificationsEnabled: z.boolean(),
+  statusNotificationsEnabled: z.boolean(),
+  assigneeNotificationsEnabled: z.boolean(),
+  commentNotificationsEnabled: z.boolean(),
+  doNotDisturbEnabled: z.boolean(),
+  doNotDisturbStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable(),
+  doNotDisturbEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable(),
+  timeZone: z.string().trim().min(1).max(100),
+  recentlyClosedDays: z.union(DESKTOP_RECENTLY_CLOSED_DAYS.map((days) => z.literal(days))),
+};
+export const desktopPreferenceSchema = z.object({
+  ...desktopPreferenceFields,
+  updatedAt: isoDateTimeSchema,
+});
+export const updateDesktopPreferenceSchema = z.object(desktopPreferenceFields).partial()
+  .refine((value) => Object.keys(value).length > 0, "At least one field is required");
+
+export const issueNotificationMuteSchema = z.object({
+  issueId: idSchema,
+  muted: z.boolean(),
+  createdAt: nullableIsoDateTimeSchema,
+});
+export const issueNotificationMuteListSchema = z.object({
+  issueIds: z.array(idSchema),
+});
+
+export const realtimeEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("hello"), protocolVersion: z.literal(1), serverTime: isoDateTimeSchema }),
+  z.object({ type: z.literal("issue.changed"), issueId: idSchema, updatedAt: isoDateTimeSchema, actorId: idSchema }),
+  z.object({ type: z.literal("notification.created"), notification: desktopNotificationSchema }),
+  z.object({ type: z.literal("notification.read"), issueId: idSchema.nullable(), notificationIds: z.array(idSchema), readAt: isoDateTimeSchema }),
+  z.object({ type: z.literal("subscription.changed"), issueId: idSchema, subscribed: z.boolean() }),
+  z.object({ type: z.literal("notification-mute.changed"), issueId: idSchema, muted: z.boolean() }),
+  z.object({ type: z.literal("preferences.changed"), updatedAt: isoDateTimeSchema }),
+  z.object({ type: z.literal("ping"), sentAt: isoDateTimeSchema }),
+]);
+
 export type LoginInput = z.infer<typeof loginSchema>;
 export type CreateUserInput = z.infer<typeof createUserSchema>;
 export type RegisterUserInput = z.infer<typeof registerUserSchema>;
@@ -196,6 +344,25 @@ export type IssueExportQuery = z.infer<typeof issueExportQuerySchema>;
 export type CreateApiTokenInput = z.infer<typeof createApiTokenSchema>;
 export type YunxiaoIntegrationInput = z.infer<typeof yunxiaoIntegrationSchema>;
 export type OssSettingInput = z.infer<typeof ossSettingSchema>;
+export type CreateDesktopPairingInput = z.infer<typeof createDesktopPairingSchema>;
+export type DesktopPairingCreateResponse = z.infer<typeof desktopPairingCreateResponseSchema>;
+export type DesktopPairingVerifyQuery = z.infer<typeof desktopPairingVerifyQuerySchema>;
+export type DesktopPairingVerification = z.infer<typeof desktopPairingVerificationSchema>;
+export type DesktopPairingApprovalInput = z.infer<typeof desktopPairingApprovalSchema>;
+export type DesktopPairingApprovalResponse = z.infer<typeof desktopPairingApprovalResponseSchema>;
+export type DesktopPairingExchangeInput = z.infer<typeof desktopPairingExchangeSchema>;
+export type DesktopPairingExchangeResponse = z.infer<typeof desktopPairingExchangeResponseSchema>;
+export type DesktopApiToken = z.infer<typeof desktopApiTokenSchema>;
+export type DesktopNotification = z.infer<typeof desktopNotificationSchema>;
+export type DesktopUserSummary = z.infer<typeof desktopUserSummarySchema>;
+export type DesktopLabelSummary = z.infer<typeof desktopLabelSummarySchema>;
+export type DesktopIssueSummary = z.infer<typeof desktopIssueSummarySchema>;
+export type DesktopOverview = z.infer<typeof desktopOverviewSchema>;
+export type DesktopPreference = z.infer<typeof desktopPreferenceSchema>;
+export type UpdateDesktopPreferenceInput = z.infer<typeof updateDesktopPreferenceSchema>;
+export type IssueNotificationMute = z.infer<typeof issueNotificationMuteSchema>;
+export type IssueNotificationMuteList = z.infer<typeof issueNotificationMuteListSchema>;
+export type RealtimeEvent = z.infer<typeof realtimeEventSchema>;
 
 export interface ApiErrorBody {
   error: { code: string; message: string; requestId: string; details?: unknown };

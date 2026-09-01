@@ -53,10 +53,12 @@ function parseLabelIds(content: string, allowedIds: Set<number>, limit: number):
   return [...new Set(value.labelIds.filter((id): id is number => Number.isSafeInteger(id) && allowedIds.has(id as number)))].slice(0, limit);
 }
 
-export async function assignAiLabels(prisma: PrismaClient, issue: Pick<Issue, "id" | "title" | "body">, setting: PlatformSetting, options: AiOptions = {}): Promise<number[]> {
-  if (!setting.aiEnabled || !setting.aiUrl || !setting.aiModel) return [];
+export type AiLabelAssignment = { labelIds: number[]; updatedAt: Date | null };
+
+export async function assignAiLabels(prisma: PrismaClient, issue: Pick<Issue, "id" | "title" | "body">, setting: PlatformSetting, options: AiOptions = {}): Promise<AiLabelAssignment> {
+  if (!setting.aiEnabled || !setting.aiUrl || !setting.aiModel) return { labelIds: [], updatedAt: null };
   const labels = await prisma.label.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true, description: true } });
-  if (!labels.length) return [];
+  if (!labels.length) return { labelIds: [], updatedAt: null };
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? setting.aiTimeoutSeconds * 1_000);
   try {
@@ -93,11 +95,12 @@ export async function assignAiLabels(prisma: PrismaClient, issue: Pick<Issue, "i
     const content = payload.choices?.[0]?.message?.content;
     if (typeof content !== "string") throw new Error("AI labeling returned an invalid response");
     const labelIds = parseLabelIds(content, new Set(labels.map(({ id }) => id)), setting.aiMaxLabels);
-    if (!labelIds.length) return [];
+    if (!labelIds.length) return { labelIds: [], updatedAt: null };
     return prisma.$transaction(async (tx) => {
-      if (await tx.issueLabel.count({ where: { issueId: issue.id } })) return [];
+      if (await tx.issueLabel.count({ where: { issueId: issue.id } })) return { labelIds: [], updatedAt: null };
       await tx.issueLabel.createMany({ data: labelIds.map((labelId) => ({ issueId: issue.id, labelId })) });
-      return labelIds;
+      const updated = await tx.issue.update({ where: { id: issue.id }, data: { updatedAt: new Date() }, select: { updatedAt: true } });
+      return { labelIds, updatedAt: updated.updatedAt };
     });
   } finally {
     clearTimeout(timeout);

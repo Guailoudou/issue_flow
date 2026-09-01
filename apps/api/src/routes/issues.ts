@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { Prisma, PrismaClient, User } from "@prisma/client";
 import { createIssueSchema, issueQuerySchema, subscriptionSchema, updateIssueSchema } from "@issueflow/shared";
 import { ApiError } from "../errors";
-import { hasRole, isAdmin, issueAccess, notifyIssue, parseId, timelineData } from "../utils";
+import { hasRole, isAdmin, issueAccess, issueRelatedUserIds, notifyIssue, parseId, publishNotifications, timelineData } from "../utils";
 import { assignAiLabels, type AiOptions } from "../ai/labeler";
 
 const userSelect = { id: true, username: true, displayName: true, email: true, role: true, active: true, createdAt: true, updatedAt: true, businessRoles: { select: { role: true } } } as const;
@@ -33,6 +33,14 @@ const diff = (oldIds: number[], nextIds: number[]) => ({ added: nextIds.filter((
 export async function issueRoutes(app: FastifyInstance, prisma: PrismaClient, aiOptions: AiOptions = {}) {
   // ponytail: in-process queue; use persistent jobs when restart-safe delivery or multi-instance coordination is required.
   let aiLabelQueue = Promise.resolve();
+  const publishIssueChanged = async (issueId: number, updatedAt: Date, actorId: number, additionalUserIds: number[] = []) => {
+    try {
+      const userIds = await issueRelatedUserIds(prisma, issueId, additionalUserIds);
+      app.realtime.publish(userIds, { type: "issue.changed", issueId, updatedAt: updatedAt.toISOString(), actorId });
+    } catch (error) {
+      app.log.warn({ err: error, issueId }, "Realtime issue publication failed after commit");
+    }
+  };
 
   app.get("/issues", { preHandler: app.authenticate }, async (request) => {
     const query = issueQuerySchema.parse(request.query);
@@ -78,7 +86,7 @@ export async function issueRoutes(app: FastifyInstance, prisma: PrismaClient, ai
     const setting = await prisma.platformSetting.findUniqueOrThrow({ where: { id: 1 } });
     if (!isAdmin(request.currentUser) && !setting.allowUserCreateIssue) throw new ApiError(403, "ISSUE_CREATION_DISABLED", "Issue creation is disabled");
     await validateRelations(prisma, productOwnerIds, developerOwnerIds, input.labelIds, input.milestoneId);
-    const issue = await prisma.$transaction(async (tx) => {
+    const { issue, notifications } = await prisma.$transaction(async (tx) => {
       const created = await tx.issue.create({ data: {
         title: input.title, body: input.body, authorId: request.currentUser.id, milestoneId: input.milestoneId ?? null, isProductIssue: hasRole(request.currentUser, "PRODUCT"),
         assignees: { create: [
@@ -90,12 +98,17 @@ export async function issueRoutes(app: FastifyInstance, prisma: PrismaClient, ai
       await tx.subscription.create({ data: { issueId: created.id, userId: request.currentUser.id } });
       for (const userId of new Set([...productOwnerIds, ...developerOwnerIds])) await tx.subscription.upsert({ where: { issueId_userId: { issueId: created.id, userId } }, update: {}, create: { issueId: created.id, userId } });
       await tx.timelineEvent.create({ data: { issueId: created.id, actorId: request.currentUser.id, type: "ISSUE_CREATED", data: timelineData({ title: created.title }) } });
-      return created;
+      const notifications = await notifyIssue(tx, created.id, request.currentUser.id, "ISSUE_CREATED", `Issue #${created.id} was created`, [...productOwnerIds, ...developerOwnerIds], "ASSIGNED", `You were assigned to #${created.id}`);
+      return { issue: created, notifications };
     });
-    await notifyIssue(prisma, issue.id, request.currentUser.id, "ASSIGNED", `You were assigned to #${issue.id}`, [...productOwnerIds, ...developerOwnerIds]);
+    publishNotifications(app.realtime, notifications);
+    await publishIssueChanged(issue.id, issue.updatedAt, request.currentUser.id, [request.currentUser.id]);
     if (setting.aiEnabled && !input.labelIds?.length) {
       aiLabelQueue = aiLabelQueue.then(async () => {
-        await assignAiLabels(prisma, issue, setting, aiOptions);
+        const assignment = await assignAiLabels(prisma, issue, setting, aiOptions);
+        if (assignment.labelIds.length && assignment.updatedAt) {
+          await publishIssueChanged(issue.id, assignment.updatedAt, request.currentUser.id, [request.currentUser.id]);
+        }
       }).catch((error) => {
         app.log.warn({ err: error, issueId: issue.id }, "AI issue labeling failed");
       });
@@ -120,7 +133,12 @@ export async function issueRoutes(app: FastifyInstance, prisma: PrismaClient, ai
     const labelChange = input.labelIds ? diff(oldLabels.map((item) => item.labelId), [...new Set(input.labelIds)]) : null;
     const titleChanged = input.title !== undefined && input.title !== old.title;
     const bodyChanged = input.body !== undefined && input.body !== old.body;
-    const issue = await prisma.$transaction(async (tx) => {
+    const ownersChanged = Boolean(
+      (productOwnerChange && (productOwnerChange.added.length || productOwnerChange.removed.length))
+      || (developerOwnerChange && (developerOwnerChange.added.length || developerOwnerChange.removed.length)),
+    );
+    const eventType = input.state && input.state !== old.state ? "STATE_CHANGED" : ownersChanged ? "ASSIGNEES_CHANGED" : "ISSUE_UPDATED";
+    const { issue, notifications } = await prisma.$transaction(async (tx) => {
       const changed = await tx.issue.updateMany({ where: { id, updatedAt: new Date(input.updatedAt) }, data: {
         ...(input.title !== undefined ? { title: input.title } : {}), ...(input.body !== undefined ? { body: input.body } : {}),
         ...(input.state !== undefined ? { state: input.state, closedAt: input.state === "CLOSED" ? new Date() : null } : {}),
@@ -141,11 +159,12 @@ export async function issueRoutes(app: FastifyInstance, prisma: PrismaClient, ai
       if (input.milestoneId !== undefined && input.milestoneId !== old.milestoneId) events.push({ type: "MILESTONE_CHANGED", data: { from: old.milestoneId, to: input.milestoneId } });
       if (events.length) await tx.timelineEvent.createMany({ data: events.map((event) => ({ issueId: id, actorId: request.currentUser.id, type: event.type, data: timelineData(event.data) })) });
       for (const userId of new Set([...(productOwnerChange?.added ?? []), ...(developerOwnerChange?.added ?? [])])) await tx.subscription.upsert({ where: { issueId_userId: { issueId: id, userId } }, update: {}, create: { issueId: id, userId } });
-      return tx.issue.findUniqueOrThrow({ where: { id }, include: issueInclude });
+      const issue = await tx.issue.findUniqueOrThrow({ where: { id }, include: issueInclude });
+      const notifications = await notifyIssue(tx, id, request.currentUser.id, eventType, `Issue #${id} was updated`, [...(productOwnerChange?.added ?? []), ...(developerOwnerChange?.added ?? [])], "ASSIGNED", `You were assigned to #${id}`);
+      return { issue, notifications };
     });
-    const ownersChanged = productOwnerChange || developerOwnerChange;
-    const eventType = input.state && input.state !== old.state ? "STATE_CHANGED" : ownersChanged ? "ASSIGNEES_CHANGED" : "ISSUE_UPDATED";
-    await notifyIssue(prisma, id, request.currentUser.id, eventType, `Issue #${id} was updated`, [...(productOwnerChange?.added ?? []), ...(developerOwnerChange?.added ?? [])]);
+    publishNotifications(app.realtime, notifications);
+    await publishIssueChanged(id, issue.updatedAt, request.currentUser.id, [...oldProductOwners, ...oldDeveloperOwners, request.currentUser.id]);
     return issue;
   });
 
@@ -154,6 +173,7 @@ export async function issueRoutes(app: FastifyInstance, prisma: PrismaClient, ai
     if (!(await prisma.issue.findUnique({ where: { id: issueId }, select: { id: true } }))) throw new ApiError(404, "ISSUE_NOT_FOUND", "Issue not found");
     if (subscribed) await prisma.subscription.upsert({ where: { issueId_userId: { issueId, userId: request.currentUser.id } }, update: {}, create: { issueId, userId: request.currentUser.id } });
     else await prisma.subscription.deleteMany({ where: { issueId, userId: request.currentUser.id } });
+    app.realtime.publish([request.currentUser.id], { type: "subscription.changed", issueId, subscribed });
     return { subscribed };
   });
 }
