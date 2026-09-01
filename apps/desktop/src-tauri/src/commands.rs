@@ -12,7 +12,7 @@ use crate::tray::update_tray_badge;
 use crate::window::WindowStateManager;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
@@ -752,6 +752,8 @@ pub async fn update_app_config(
         }
     }
 
+    window_mgr.set_edge_snap_enabled(tx_res.config.edge_snap_enabled);
+
     Ok(tx_res.config)
 }
 
@@ -778,6 +780,34 @@ pub fn set_window_pinned(
         ));
     }
 
+    Ok(())
+}
+
+#[tauri::command]
+pub fn start_window_drag(window: WebviewWindow) -> Result<(), String> {
+    window
+        .start_dragging()
+        .map_err(|e| format!("Failed to start window drag: {e}"))
+}
+
+#[tauri::command]
+pub fn snap_window_to_nearest_edge(
+    window: WebviewWindow,
+    window_mgr: State<'_, Arc<WindowStateManager>>,
+) -> Result<(), String> {
+    window_mgr.snap_to_nearest_edge(&window)
+}
+
+#[tauri::command]
+pub async fn reconnect_realtime(
+    config_mgr: State<'_, Arc<ConfigManager>>,
+    realtime_mgr: State<'_, Arc<RealtimeManager>>,
+) -> Result<(), String> {
+    let server_url = validate_server_url(&config_mgr.get().server_url)?;
+    if keychain::get_token(&server_url)?.is_none() {
+        return Err(format!("UNAUTHENTICATED:{server_url}"));
+    }
+    realtime_mgr.start(&server_url).await;
     Ok(())
 }
 
@@ -1014,12 +1044,14 @@ mod tests {
             global_shortcut: "Alt+CommandOrControl+I".to_string(),
             launch_at_login: false,
             pinned: false,
+            edge_snap_enabled: true,
         };
         let new_cfg = AppConfig {
             server_url: "https://new.example.com".to_string(),
             global_shortcut: "Alt+CommandOrControl+K".to_string(),
             launch_at_login: true,
             pinned: true,
+            edge_snap_enabled: true,
         };
 
         let unreg_called = Mutex::new(false);
@@ -1076,12 +1108,14 @@ mod tests {
             global_shortcut: "Alt+CommandOrControl+I".to_string(),
             launch_at_login: false,
             pinned: false,
+            edge_snap_enabled: true,
         };
         let new_cfg = AppConfig {
             server_url: "http://localhost:3101".to_string(),
             global_shortcut: "Alt+CommandOrControl+K".to_string(),
             launch_at_login: true,
             pinned: true,
+            edge_snap_enabled: true,
         };
 
         let reg_called = Mutex::new(false);
@@ -1133,12 +1167,14 @@ mod tests {
             global_shortcut: "Alt+CommandOrControl+I".to_string(),
             launch_at_login: false,
             pinned: false,
+            edge_snap_enabled: true,
         };
         let new_cfg = AppConfig {
             server_url: "https://server-with-token.example.com".to_string(),
             global_shortcut: "Alt+CommandOrControl+I".to_string(),
             launch_at_login: false,
             pinned: false,
+            edge_snap_enabled: true,
         };
 
         // Case 1: Preflight finds existing token -> returns has_token = true

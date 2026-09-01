@@ -50,7 +50,10 @@ pub fn run() {
                 notif_mgr.clone(),
                 http_client.clone(),
             ));
-            let window_mgr = Arc::new(WindowStateManager::new(config_mgr.get().pinned));
+            let window_mgr = Arc::new(WindowStateManager::new(
+                config_mgr.get().pinned,
+                config_mgr.get().edge_snap_enabled,
+            ));
             let pairing_state_mgr = Arc::new(PairingStateManager::new());
 
             let current_config = config_mgr.get();
@@ -128,6 +131,9 @@ pub fn run() {
             get_app_config,
             update_app_config,
             set_window_pinned,
+            start_window_drag,
+            snap_window_to_nearest_edge,
+            reconnect_realtime,
             hide_window,
             set_focused_issue,
             open_main_site,

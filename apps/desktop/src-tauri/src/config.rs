@@ -5,11 +5,21 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct AppConfig {
+    #[serde(alias = "server_url")]
     pub server_url: String,
+    #[serde(alias = "global_shortcut")]
     pub global_shortcut: String,
+    #[serde(alias = "launch_at_login")]
     pub launch_at_login: bool,
     pub pinned: bool,
+    #[serde(default = "default_edge_snap_enabled", alias = "edge_snap_enabled")]
+    pub edge_snap_enabled: bool,
+}
+
+fn default_edge_snap_enabled() -> bool {
+    true
 }
 
 impl Default for AppConfig {
@@ -19,6 +29,7 @@ impl Default for AppConfig {
             global_shortcut: "Alt+CommandOrControl+I".to_string(),
             launch_at_login: false,
             pinned: false,
+            edge_snap_enabled: true,
         }
     }
 }
@@ -131,6 +142,7 @@ mod tests {
         let config = manager.get();
         assert_eq!(config.server_url, "http://localhost:3101");
         assert_eq!(config.pinned, false);
+        assert!(config.edge_snap_enabled);
 
         let updated = manager
             .update(|c| {
@@ -146,6 +158,28 @@ mod tests {
         let reloaded = ConfigManager::new(dir.path().to_path_buf());
         assert_eq!(reloaded.get().pinned, true);
         assert_eq!(reloaded.get().server_url, "https://issueflow.example.com");
+    }
+
+    #[test]
+    fn test_old_config_enables_edge_snap_by_default() {
+        let legacy = r#"{
+            "server_url": "https://issues.example.com",
+            "global_shortcut": "Alt+CommandOrControl+I",
+            "launch_at_login": false,
+            "pinned": false
+        }"#;
+        let config: AppConfig = serde_json::from_str(legacy).unwrap();
+        assert!(config.edge_snap_enabled);
+    }
+
+    #[test]
+    fn test_config_serializes_for_react_with_camel_case_fields() {
+        let serialized = serde_json::to_value(AppConfig::default()).unwrap();
+        assert_eq!(serialized["serverUrl"], "http://localhost:3101");
+        assert_eq!(serialized["globalShortcut"], "Alt+CommandOrControl+I");
+        assert_eq!(serialized["launchAtLogin"], false);
+        assert_eq!(serialized["edgeSnapEnabled"], true);
+        assert!(serialized.get("server_url").is_none());
     }
 
     #[test]

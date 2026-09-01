@@ -43,6 +43,7 @@ describe('Desktop App', () => {
       globalShortcut: 'Alt+CommandOrControl+I',
       launchAtLogin: false,
       pinned: false,
+      edgeSnapEnabled: true,
     });
   });
 
@@ -111,6 +112,7 @@ describe('Desktop App', () => {
       globalShortcut: 'Alt+CommandOrControl+I',
       launchAtLogin: false,
       pinned: false,
+      edgeSnapEnabled: true,
     });
 
     const otherServerData: DesktopOverviewData = {
@@ -175,6 +177,7 @@ describe('Desktop App', () => {
       globalShortcut: 'Alt+CommandOrControl+I',
       launchAtLogin: false,
       pinned: false,
+      edgeSnapEnabled: true,
     });
     vi.spyOn(tauriBridge, 'checkAuthStatus').mockResolvedValue({
       authenticated: true,
@@ -249,6 +252,7 @@ describe('Desktop App', () => {
       globalShortcut: 'Alt+CommandOrControl+I',
       launchAtLogin: false,
       pinned: false,
+      edgeSnapEnabled: true,
     });
     vi.spyOn(tauriBridge, 'checkAuthStatus').mockResolvedValue({
       authenticated: false,
@@ -291,6 +295,7 @@ describe('Desktop App', () => {
       globalShortcut: 'Alt+CommandOrControl+I',
       launchAtLogin: false,
       pinned: false,
+      edgeSnapEnabled: true,
     });
     vi.spyOn(tauriBridge, 'checkAuthStatus').mockResolvedValueOnce({
       authenticated: true,
@@ -324,6 +329,7 @@ describe('Desktop App', () => {
       globalShortcut: 'Alt+CommandOrControl+I',
       launchAtLogin: false,
       pinned: false,
+      edgeSnapEnabled: true,
     });
     // Check auth on server B fails (no token)
     vi.spyOn(tauriBridge, 'checkAuthStatus').mockResolvedValueOnce({
@@ -373,6 +379,7 @@ describe('Desktop App', () => {
       globalShortcut: 'Alt+CommandOrControl+I',
       launchAtLogin: false,
       pinned: false,
+      edgeSnapEnabled: true,
     });
     vi.spyOn(tauriBridge, 'checkAuthStatus').mockResolvedValue({
       authenticated: true,
@@ -411,4 +418,3 @@ describe('Desktop App', () => {
     expect(getOverviewCache('https://serverA.example.com', 1)).toBeNull();
   });
 });
-

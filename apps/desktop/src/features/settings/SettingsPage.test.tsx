@@ -26,6 +26,7 @@ describe('SettingsPage', () => {
       globalShortcut: 'Alt+CommandOrControl+I',
       launchAtLogin: false,
       pinned: false,
+      edgeSnapEnabled: true,
     });
 
     const updatePrefSpy = vi
@@ -63,11 +64,11 @@ describe('SettingsPage', () => {
     expect(screen.getByText('@alex')).toBeInTheDocument();
     expect(screen.getByText('启用 macOS 系统通知')).toBeInTheDocument();
 
-    const shortcutInput = screen.getByLabelText('呼出快捷键');
-    expect(shortcutInput).toHaveValue('Alt+CommandOrControl+I');
+    const shortcutRecorder = screen.getByRole('button', { name: '呼出快捷键' });
+    expect(shortcutRecorder).toHaveTextContent('⌥⌘I');
 
-    await user.clear(shortcutInput);
-    await user.type(shortcutInput, 'CommandOrControl+Shift+K');
+    await user.click(shortcutRecorder);
+    await user.keyboard('{Meta>}{Shift>}k{/Shift}{/Meta}');
 
     await user.click(screen.getByRole('button', { name: '保存' }));
 
@@ -106,6 +107,7 @@ describe('SettingsPage', () => {
       globalShortcut: 'Alt+CommandOrControl+I',
       launchAtLogin: false,
       pinned: false,
+      edgeSnapEnabled: true,
     });
 
     vi.spyOn(tauriBridge, 'updateDesktopPreferences').mockRejectedValue(
@@ -151,6 +153,7 @@ describe('SettingsPage', () => {
       globalShortcut: 'Alt+CommandOrControl+I',
       launchAtLogin: false,
       pinned: false,
+      edgeSnapEnabled: true,
     });
 
     vi.spyOn(tauriBridge, 'updateDesktopPreferences').mockResolvedValue({} as never);
@@ -199,6 +202,7 @@ describe('SettingsPage', () => {
       globalShortcut: 'Alt+CommandOrControl+I',
       launchAtLogin: false,
       pinned: false,
+      edgeSnapEnabled: true,
     });
 
     const updateCfgSpy = vi.spyOn(tauriBridge, 'updateAppConfig');
@@ -233,6 +237,7 @@ describe('SettingsPage', () => {
       globalShortcut: 'Alt+CommandOrControl+I',
       launchAtLogin: false,
       pinned: false,
+      edgeSnapEnabled: true,
     });
 
     vi.spyOn(window, 'confirm').mockReturnValue(true);
@@ -275,6 +280,7 @@ describe('SettingsPage', () => {
       globalShortcut: 'Alt+CommandOrControl+I',
       launchAtLogin: false,
       pinned: false,
+      edgeSnapEnabled: true,
     });
 
     vi.spyOn(window, 'confirm').mockReturnValue(true);
@@ -308,5 +314,4 @@ describe('SettingsPage', () => {
     expect(onLogout).toHaveBeenCalledTimes(1);
   });
 });
-
 

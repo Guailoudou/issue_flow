@@ -8,6 +8,7 @@ import {
   WifiOff,
 } from 'lucide-react';
 import type { RealtimeStatus } from '../../lib/types';
+import { useWindowDrag } from '../../lib/tauri/useWindowDrag';
 
 export function OverviewHeader({
   unreadCount,
@@ -26,6 +27,7 @@ export function OverviewHeader({
   onOpenSettings: () => void;
   isRefreshing: boolean;
 }) {
+  const handleWindowDrag = useWindowDrag();
   const statusConfig = {
     connected: {
       icon: Wifi,
@@ -54,7 +56,10 @@ export function OverviewHeader({
   }[realtimeStatus];
 
   return (
-    <header className="flex h-12 shrink-0 items-center justify-between border-b border-slate-200/80 bg-white/95 px-3 backdrop-blur select-none">
+    <header
+      onMouseDown={handleWindowDrag}
+      className="flex h-12 shrink-0 cursor-move items-center justify-between border-b border-slate-200/80 bg-white/95 px-3 backdrop-blur select-none"
+    >
       <div className="flex items-center gap-2">
         <div className="flex size-7 items-center justify-center rounded-lg bg-brand-600 text-white shadow-xs">
           <CircleDot className="size-4" aria-hidden="true" />
@@ -83,7 +88,7 @@ export function OverviewHeader({
         )}
       </div>
 
-      <div className="flex items-center gap-0.5">
+      <div className="flex cursor-default items-center gap-0.5" data-no-window-drag>
         <button
           type="button"
           onClick={onTogglePin}
