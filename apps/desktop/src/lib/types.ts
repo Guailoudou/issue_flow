@@ -62,6 +62,7 @@ export interface AppConfig {
   globalShortcut: string;
   launchAtLogin: boolean;
   pinned: boolean;
+  edgeSnapEnabled: boolean;
 }
 
 export type RealtimeStatus = 'connected' | 'connecting' | 'disconnected' | 'unauthenticated';
@@ -79,4 +80,3 @@ export interface RealtimeEventEnvelope {
   generation: number;
   event: RealtimeEvent;
 }
-

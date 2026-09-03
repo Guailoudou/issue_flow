@@ -12,6 +12,7 @@ describe('AuthFlow', () => {
       globalShortcut: 'Alt+CommandOrControl+I',
       launchAtLogin: false,
       pinned: false,
+      edgeSnapEnabled: true,
     });
   });
 
@@ -398,4 +399,3 @@ describe('AuthFlow', () => {
     expect(pollSpy).toHaveBeenCalledTimes(1);
   });
 });
-

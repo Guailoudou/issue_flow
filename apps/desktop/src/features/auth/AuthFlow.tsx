@@ -3,9 +3,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '../../components/Button';
 import { Spinner } from '../../components/Spinner';
 import { tauriBridge } from '../../lib/tauri/bridge';
+import { useWindowDrag } from '../../lib/tauri/useWindowDrag';
 import type { PublicPairingCreateResponse } from '../../lib/types';
 
 export function AuthFlow({ onAuthenticated }: { onAuthenticated: () => void }) {
+  const handleWindowDrag = useWindowDrag();
   const [serverUrl, setServerUrl] = useState('http://localhost:3101');
   const [pairingSession, setPairingSession] = useState<{
     sessionId: string;
@@ -255,7 +257,7 @@ export function AuthFlow({ onAuthenticated }: { onAuthenticated: () => void }) {
   return (
     <div className="flex h-full flex-col justify-between p-6 bg-slate-50 text-slate-800">
       <div className="space-y-6">
-        <div className="flex items-center gap-2.5">
+        <div className="flex cursor-move items-center gap-2.5" onMouseDown={handleWindowDrag}>
           <div className="flex size-9 items-center justify-center rounded-xl bg-brand-600 text-white shadow-sm">
             <CircleDot className="size-5" aria-hidden="true" />
           </div>

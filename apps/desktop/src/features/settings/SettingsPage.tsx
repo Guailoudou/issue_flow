@@ -3,22 +3,27 @@ import {
   ChevronLeft,
   Clock,
   Globe,
+  Keyboard,
   Laptop,
   LogOut,
+  Magnet,
   Moon,
   Save,
   ShieldCheck,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import type { KeyboardEvent } from 'react';
 import { Button } from '../../components/Button';
 import { Switch } from '../../components/Switch';
 import { tauriBridge } from '../../lib/tauri/bridge';
+import { useWindowDrag } from '../../lib/tauri/useWindowDrag';
 import type {
   AppConfig,
   DesktopPreferenceData,
   PublicUserInfo,
   RealtimeStatus,
 } from '../../lib/types';
+import { captureShortcut, formatShortcut } from './shortcutRecorder';
 
 export interface SettingsPageProps {
   onBack: () => void;
@@ -35,12 +40,15 @@ export function SettingsPage({
   currentUser,
   realtimeStatus = 'connected',
 }: SettingsPageProps) {
+  const handleWindowDrag = useWindowDrag();
   const [preferences, setPreferences] = useState<DesktopPreferenceData | null>(null);
   const [preferencesLoadError, setPreferencesLoadError] = useState<string | null>(null);
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccessNotice, setSaveSuccessNotice] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [isRecordingShortcut, setIsRecordingShortcut] = useState(false);
+  const [shortcutError, setShortcutError] = useState<string | null>(null);
 
   const isOffline = realtimeStatus !== 'connected';
   const originalServerUrlRef = useRef<string | null>(null);
@@ -73,6 +81,7 @@ export function SettingsPage({
 
   const handleSave = async () => {
     if (!appConfig) return;
+    setIsRecordingShortcut(false);
     setIsSaving(true);
     setSaveSuccessNotice(null);
     setSaveError(null);
@@ -156,6 +165,41 @@ export function SettingsPage({
     }
   };
 
+  const handleShortcutKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (!isRecordingShortcut) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (event.key === 'Escape') {
+      setIsRecordingShortcut(false);
+      setShortcutError(null);
+      return;
+    }
+
+    const result = captureShortcut(event);
+    if (result.kind === 'pending') {
+      setShortcutError(null);
+      return;
+    }
+    if (result.kind === 'invalid') {
+      setShortcutError(result.message);
+      return;
+    }
+
+    setAppConfig((prev) => prev && { ...prev, globalShortcut: result.shortcut });
+    setShortcutError(null);
+    setIsRecordingShortcut(false);
+  };
+
+  const handleSnapNow = async () => {
+    setSaveError(null);
+    try {
+      await tauriBridge.snapWindowToNearestEdge();
+    } catch (err) {
+      setSaveError(`窗口贴边失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   const handleLogoutClick = async () => {
     if (
       window.confirm(
@@ -176,7 +220,10 @@ export function SettingsPage({
   return (
     <div className="flex h-screen w-full flex-col bg-slate-50 text-slate-900 select-none overflow-hidden">
       {/* Header */}
-      <header className="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-3 select-none">
+      <header
+        onMouseDown={handleWindowDrag}
+        className="flex h-12 shrink-0 cursor-move items-center justify-between border-b border-slate-200 bg-white px-3 select-none"
+      >
         <button
           type="button"
           onClick={onBack}
@@ -502,25 +549,72 @@ export function SettingsPage({
             <div className="space-y-3">
               <div className="space-y-1.5">
                 <div>
-                  <label htmlFor="globalShortcutInput" className="font-medium text-slate-700">
+                  <span id="globalShortcutLabel" className="font-medium text-slate-700">
                     呼出快捷键
-                  </label>
-                  <p className="text-[11px] text-slate-400">
-                    全局呼出与隐藏浮窗（例如 Alt+CommandOrControl+I）
+                  </span>
+                  <p id="globalShortcutHelp" className="text-[11px] text-slate-400">
+                    点击后直接按下组合键；Esc 取消录制
                   </p>
                 </div>
-                <input
+                <button
                   id="globalShortcutInput"
-                  type="text"
-                  value={appConfig.globalShortcut || ''}
-                  onChange={(e) =>
-                    setAppConfig(
-                      (prev) => prev && { ...prev, globalShortcut: e.target.value },
-                    )
-                  }
-                  placeholder="Alt+CommandOrControl+I"
-                  className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
-                />
+                  type="button"
+                  aria-labelledby="globalShortcutLabel"
+                  aria-describedby={`globalShortcutHelp${shortcutError ? ' globalShortcutError' : ''}`}
+                  aria-pressed={isRecordingShortcut}
+                  onClick={() => {
+                    setShortcutError(null);
+                    setIsRecordingShortcut(true);
+                  }}
+                  onKeyDown={handleShortcutKeyDown}
+                  onBlur={() => setIsRecordingShortcut(false)}
+                  className={`flex w-full items-center justify-between rounded-lg border px-2.5 py-2 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
+                    isRecordingShortcut
+                      ? 'border-teal-400 bg-teal-50 text-teal-800'
+                      : 'border-slate-200 bg-white text-slate-800 hover:border-slate-300'
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    <Keyboard className="size-3.5" aria-hidden="true" />
+                    <span className="text-xs font-medium">
+                      {isRecordingShortcut ? '请按下新的组合键…' : '录制快捷键'}
+                    </span>
+                  </span>
+                  <kbd className="rounded border border-slate-200 bg-white px-2 py-0.5 font-mono text-xs shadow-xs">
+                    {formatShortcut(appConfig.globalShortcut)}
+                  </kbd>
+                </button>
+                {shortcutError && (
+                  <p id="globalShortcutError" role="alert" className="text-[11px] text-rose-600">
+                    {shortcutError}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-medium text-slate-700">窗口贴边吸附</p>
+                  <p className="text-[11px] text-slate-400">
+                    拖动结束后自动吸附到最近的屏幕边缘
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleSnapNow}
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-teal-700 hover:bg-teal-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                  >
+                    <Magnet className="size-3" aria-hidden="true" />
+                    立即贴边
+                  </button>
+                  <Switch
+                    checked={appConfig.edgeSnapEnabled}
+                    onChange={(val) =>
+                      setAppConfig((prev) => prev && { ...prev, edgeSnapEnabled: val })
+                    }
+                    aria-label="窗口贴边吸附"
+                  />
+                </div>
               </div>
 
               <div className="flex items-center justify-between">

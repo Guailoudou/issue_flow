@@ -30,6 +30,7 @@ let mockConfig: AppConfig = {
   globalShortcut: 'Alt+CommandOrControl+I',
   launchAtLogin: false,
   pinned: false,
+  edgeSnapEnabled: true,
 };
 
 let mockAuthenticated = true;
@@ -110,6 +111,21 @@ async function invokeTauri<T>(cmd: string, args?: Record<string, unknown>): Prom
 }
 
 export const tauriBridge = {
+  async startWindowDrag(): Promise<void> {
+    if (!isTauriEnv) return;
+    return await invokeTauri<void>('start_window_drag');
+  },
+
+  async snapWindowToNearestEdge(): Promise<void> {
+    if (!isTauriEnv) return;
+    return await invokeTauri<void>('snap_window_to_nearest_edge');
+  },
+
+  async reconnectRealtime(): Promise<void> {
+    if (!isTauriEnv) return;
+    return await invokeTauri<void>('reconnect_realtime');
+  },
+
   async checkAuthStatus(): Promise<AuthStatusResponse> {
     if (!isTauriEnv) {
       return {

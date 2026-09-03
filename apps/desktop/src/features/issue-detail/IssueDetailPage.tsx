@@ -16,6 +16,7 @@ import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
 import { UndoToast } from '../overview/UndoToast';
 import { tauriBridge } from '../../lib/tauri/bridge';
+import { useWindowDrag } from '../../lib/tauri/useWindowDrag';
 import type { DesktopIssueItem, RealtimeStatus } from '../../lib/types';
 import { formatFullTime } from '../../lib/utils';
 
@@ -34,6 +35,7 @@ export function IssueDetailPage({
   serverUrl,
   realtimeStatus = 'connected',
 }: IssueDetailPageProps) {
+  const handleWindowDrag = useWindowDrag();
   const [issue, setIssue] = useState<DesktopIssueItem>(initialIssue);
   const [isTogglingState, setIsTogglingState] = useState(false);
   const [isTogglingSub, setIsTogglingSub] = useState(false);
@@ -239,7 +241,10 @@ export function IssueDetailPage({
   return (
     <div className="flex h-screen w-full flex-col bg-slate-50 text-slate-900 select-none overflow-hidden relative">
       {/* Header */}
-      <header className="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-3 select-none">
+      <header
+        onMouseDown={handleWindowDrag}
+        className="flex h-12 shrink-0 cursor-move items-center justify-between border-b border-slate-200 bg-white px-3 select-none"
+      >
         <button
           type="button"
           onClick={onBack}
@@ -459,4 +464,3 @@ export function IssueDetailPage({
     </div>
   );
 }
-

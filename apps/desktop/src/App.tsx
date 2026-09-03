@@ -235,8 +235,11 @@ function DesktopApp() {
     }
   };
 
-  const handleRefresh = () => {
-    overviewQuery.refetch();
+  const handleRefresh = async () => {
+    if (realtimeStatus !== 'connected' && realtimeStatus !== 'connecting') {
+      await tauriBridge.reconnectRealtime().catch(() => undefined);
+    }
+    await overviewQuery.refetch();
   };
 
   const handleAuthenticated = async () => {

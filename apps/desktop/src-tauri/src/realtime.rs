@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::tungstenite::http::{header, HeaderValue};
 use tokio_tungstenite::tungstenite::Message;
 
 const BACKOFF_STEPS: [u64; 5] = [1, 2, 5, 10, 30];
@@ -256,8 +256,9 @@ impl RealtimeManager {
                             break;
                         }
 
-                        // Readiness requirement: Before reading business messages or emitting 'connected',
-                        // must successfully fetch current user, preferences, and mute set
+                        // The socket connection and notification readiness are separate states.
+                        // A temporary preferences/mutes failure must not make an established
+                        // WebSocket appear offline.
                         let user_res = client_ref.get_current_user(&target_url).await;
                         let prefs_res = client_ref.get_desktop_preferences(&target_url).await;
                         let mutes_res = client_ref.get_notification_mutes(&target_url).await;
@@ -284,10 +285,13 @@ impl RealtimeManager {
                             break;
                         }
 
-                        // If any readiness prerequisite failed transiently, stay not-ready, close stream, and back off
-                        let (user, prefs, mutes) = match (user_res, prefs_res, mutes_res) {
-                            (Ok(u), Ok(p), Ok(m)) => (u, p, m),
-                            _ => {
+                        // Current user is required to partition realtime events safely.
+                        let user = match user_res {
+                            Ok(user) => user,
+                            Err(error) => {
+                                eprintln!(
+                                    "Realtime user bootstrap failed for {target_url}: {error}"
+                                );
                                 notif_mgr.set_not_ready_for_generation(&target_url, current_gen);
                                 if gen_tracker.load(Ordering::SeqCst) == current_gen {
                                     update_status(RealtimeStatusEnvelope {
@@ -308,15 +312,28 @@ impl RealtimeManager {
                             }
                         };
 
-                        // Atomically activate manager session and ready=true
-                        notif_mgr.activate_session(
-                            &target_url,
-                            user.id,
-                            current_gen,
-                            &prefs,
-                            mutes,
-                        );
-                        backoff_idx = 0; // Reset backoff on full readiness activation
+                        let notification_bootstrap_ready = match (prefs_res, mutes_res) {
+                            (Ok(prefs), Ok(mutes)) => {
+                                notif_mgr.activate_session(
+                                    &target_url,
+                                    user.id,
+                                    current_gen,
+                                    &prefs,
+                                    mutes,
+                                );
+                                true
+                            }
+                            (prefs, mutes) => {
+                                notif_mgr.set_not_ready_for_generation(&target_url, current_gen);
+                                eprintln!(
+                                    "Realtime connected for {target_url}, but notification bootstrap is pending: preferences={:?}, mutes={:?}",
+                                    prefs.as_ref().err(),
+                                    mutes.as_ref().err()
+                                );
+                                false
+                            }
+                        };
+                        backoff_idx = 0; // Reset backoff after the socket and user partition are ready
                         let active_user_id = user.id;
 
                         if gen_tracker.load(Ordering::SeqCst) == current_gen {
@@ -327,6 +344,58 @@ impl RealtimeManager {
                                 status: "connected".to_string(),
                             });
                         }
+
+                        let notification_bootstrap_retry = if notification_bootstrap_ready {
+                            None
+                        } else {
+                            let retry_client = client_ref.clone();
+                            let retry_notif_mgr = notif_mgr.clone();
+                            let retry_target_url = target_url.clone();
+                            let retry_generation = gen_tracker.clone();
+                            Some(tokio::spawn(async move {
+                                let mut retry_index = 1usize;
+                                loop {
+                                    let retry_secs =
+                                        BACKOFF_STEPS[retry_index.min(BACKOFF_STEPS.len() - 1)];
+                                    sleep(Duration::from_secs(retry_secs)).await;
+                                    if retry_generation.load(Ordering::SeqCst) != current_gen {
+                                        break;
+                                    }
+
+                                    let prefs = retry_client
+                                        .get_desktop_preferences(&retry_target_url)
+                                        .await;
+                                    let mutes = retry_client
+                                        .get_notification_mutes(&retry_target_url)
+                                        .await;
+                                    if retry_generation.load(Ordering::SeqCst) != current_gen {
+                                        break;
+                                    }
+
+                                    match (prefs, mutes) {
+                                        (Ok(prefs), Ok(mutes)) => {
+                                            retry_notif_mgr.activate_session(
+                                                &retry_target_url,
+                                                active_user_id,
+                                                current_gen,
+                                                &prefs,
+                                                mutes,
+                                            );
+                                            break;
+                                        }
+                                        (prefs, mutes) => {
+                                            eprintln!(
+                                                    "Notification bootstrap retry failed for {retry_target_url}: preferences={:?}, mutes={:?}",
+                                                    prefs.as_ref().err(),
+                                                    mutes.as_ref().err()
+                                                );
+                                        }
+                                    }
+
+                                    retry_index = (retry_index + 1).min(BACKOFF_STEPS.len() - 1);
+                                }
+                            }))
+                        };
 
                         while let Some(msg_res) = ws_stream.next().await {
                             if gen_tracker.load(Ordering::SeqCst) != current_gen {
@@ -356,6 +425,10 @@ impl RealtimeManager {
                                 }
                                 _ => {}
                             }
+                        }
+
+                        if let Some(retry_handle) = notification_bootstrap_retry {
+                            retry_handle.abort();
                         }
 
                         notif_mgr.set_not_ready_for_generation(&target_url, current_gen);
@@ -464,13 +537,38 @@ async fn connect_websocket(
     };
     req.headers_mut().insert("Authorization", auth_val);
 
+    if let Ok(ws_url) = url::Url::parse(url_str) {
+        let origin_scheme = if ws_url.scheme() == "wss" {
+            "https"
+        } else {
+            "http"
+        };
+        if let Some(host) = ws_url.host_str() {
+            let origin = match ws_url.port() {
+                Some(port) => format!("{origin_scheme}://{host}:{port}"),
+                None => format!("{origin_scheme}://{host}"),
+            };
+            if let Ok(origin_value) = HeaderValue::from_str(&origin) {
+                req.headers_mut().insert(header::ORIGIN, origin_value);
+            }
+        }
+    }
+    req.headers_mut().insert(
+        header::USER_AGENT,
+        HeaderValue::from_static(concat!("IssueFlow-Desktop/", env!("CARGO_PKG_VERSION"))),
+    );
+
     match connect_async(req).await {
         Ok(res) => Ok(res),
         Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => {
             let status = resp.status().as_u16();
+            eprintln!("Realtime WebSocket handshake returned HTTP {status} for {url_str}");
             Err(classify_handshake_status(status))
         }
-        Err(_) => Err(HandshakeErrorClassification::NetworkError),
+        Err(error) => {
+            eprintln!("Realtime WebSocket connection failed for {url_str}: {error}");
+            Err(HandshakeErrorClassification::NetworkError)
+        }
     }
 }
 
